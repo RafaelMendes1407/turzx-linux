@@ -16,10 +16,12 @@ jobs:
     timeout-minutes: 10
     env:
       GSK_RENDERER: cairo
-      XDG_CONFIG_HOME: ${{ runner.temp }}/turzx-config
-      XDG_STATE_HOME: ${{ runner.temp }}/turzx-state
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Isolate application settings
+        run: |
+          mkdir -p "$RUNNER_TEMP/turzx-config" "$RUNNER_TEMP/turzx-state"
+          printf 'XDG_CONFIG_HOME=%s/turzx-config\nXDG_STATE_HOME=%s/turzx-state\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Install distribution dependencies
         run: |
           sudo apt-get update
