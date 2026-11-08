@@ -1,0 +1,45 @@
+name: Linux CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Linux checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GSK_RENDERER: cairo
+      XDG_CONFIG_HOME: ${{ runner.temp }}/turzx-config
+      XDG_STATE_HOME: ${{ runner.temp }}/turzx-state
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install distribution dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 python3-pil python3-serial python3-psutil fonts-dejavu-core xvfb xauth dbus-x11 desktop-file-utils
+      - name: Unit and integration tests
+        run: /usr/bin/python3 -m unittest discover -s tests -v
+      - name: GTK smoke test
+        run: timeout 30s xvfb-run -a dbus-run-session -- ./abrir.sh --smoke-gui
+      - name: Validate desktop entry and scripts
+        run: |
+          desktop-file-validate packaging/turzx-linux.desktop
+          bash -n instalar.sh abrir.sh
+          sh -n packaging/postinst packaging/postrm
+      - name: Render example and build Debian package
+        run: |
+          /usr/bin/python3 scripts/render_demo.py
+          /usr/bin/python3 scripts/build_deb.py
+          dpkg-deb --info dist/turzx-linux_*.deb
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: turzx-linux-debian
+          path: dist/*.deb
+          if-no-files-found: error

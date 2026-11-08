@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Turzx Linux
+GenericName=Editor de temas e configurador de tela USB
+Comment=Crie temas visuais com sensores CPU e GPU para sua TURZX de 3,5 polegadas
+Exec=turzx-linux
+Icon=turzx-linux
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=TURZX;Turing;USB;monitor;painel;
+StartupNotify=true

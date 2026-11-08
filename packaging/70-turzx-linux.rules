@@ -1,0 +1,3 @@
+# Access only to the verified 3.5-inch Turing revision A, for the active local user.
+# uaccess must be set before 73-seat-late.rules applies the ACL.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="5722", ATTRS{serial}=="USB35INCHIPSV2", MODE="0660", GROUP="dialout", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1"

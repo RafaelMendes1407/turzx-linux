@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+if [ "$1" = configure ]; then
+    modprobe cdc_acm || true
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+        udevadm trigger --action=add --subsystem-match=tty --property-match=ID_SERIAL_SHORT=USB35INCHIPSV2 || true
+    fi
+fi
+exit 0

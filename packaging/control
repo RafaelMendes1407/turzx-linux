@@ -1,0 +1,10 @@
+Package: turzx-linux
+Version: 1.2.0
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: Turzx Linux Project <noreply@localhost>
+Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, python3-pil, python3-serial, python3-psutil, fonts-dejavu-core, udev, kmod
+Description: Configurador Linux para Turing Smart Screen TURZX 3.5
+ Editor visual GTK em portugues, textos livres, graficos e drag and drop,
+ sensores CPU/GPU/RAM/rede, temas, brilho e deteccao USB para revisao A.
