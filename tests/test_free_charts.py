@@ -8,10 +8,11 @@ from test_app import METRICS
 from turzx.charts import render_chart
 from turzx.gpu import GPU
 from turzx.history import History
+from turzx.macros import Macro, UNAVAILABLE
 from turzx.metrics import CATALOG, disk_groups, history_key, metric_keys, reading
 from turzx.palette import groups
 from turzx.sensors import Disk
-from turzx.theme_render import editor_preview, render_theme
+from turzx.theme_render import editor_preview, render_item, render_theme
 from turzx.themes import EditorModel, Item, Theme, from_dict, starter
 
 
@@ -170,6 +171,27 @@ class HistoryAndChartTests(unittest.TestCase):
         saved = from_dict(asdict(model.theme))
         self.assertEqual(render_theme(saved, metrics).tobytes(),
                          Image.new("RGB", saved.size, saved.background).tobytes())
+
+    def test_macros_roundtrip_apply_in_order_and_render_bar_colors(self):
+        model = EditorModel(Theme())
+        model.add_metric("cpu.usage", style="bar")
+        model.set_properties(emoji="🌡️", macros=[
+            Macro("cpu.temperature", ">=", 80, "🔥", accent="#ff0000"),
+            Macro("cpu.temperature", ">=", 60, "⚠️", accent="#ffff00"),
+            Macro("cpu.temperature", UNAVAILABLE, emoji="", accent="#ffffff"),
+        ])
+        loaded = from_dict(asdict(model.theme))
+        item = loaded.items[0]
+        self.assertEqual(item, model.theme.items[0])
+        for temperature, rgb in ((85, (255, 0, 0)), (60, (255, 255, 0)), (None, (255, 255, 255))):
+            sample = replace(METRICS, cpu=75, temperature=temperature)
+            self.assertEqual(render_item(item, sample, "auto").getpixel((12, item.height - 3)), (*rgb, 255))
+        self.assertEqual(item.emoji, "🌡️")
+        self.assertEqual(item.accent, "#6ee7b7")
+        unsafe = asdict(model.theme)
+        unsafe["items"][0]["macros"][0]["threshold"] = float("nan")
+        with self.assertRaises(ValueError):
+            from_dict(unsafe)
 
     def test_plot_gap_is_not_interpolated(self):
         metrics = replace(METRICS, sampled_at=10, history={"cpu.usage": ((0, 50), (4, 50), (5, None), (6, 50), (10, 50))})

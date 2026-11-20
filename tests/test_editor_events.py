@@ -18,11 +18,16 @@ class CanvasHarness:
         self.picture = SimpleNamespace(grab_focus=lambda: None)
         self.grid = SimpleNamespace(get_active=lambda: False)
         self.dragging = False
+        self.marquee_start = None
+        self.marquee = None
 
     def point(self, x, y):
         return viewport_point(x, y, (960, 640), self.model.theme.size)
 
     def refresh(self, *args):
+        pass
+
+    def paint(self):
         pass
 
     def show_message(self, message):
@@ -93,3 +98,50 @@ class EditorEventTests(unittest.TestCase):
         self.assertEqual(canvas.model.selection, (c.id, None))
         StudioWindow.canvas_click(canvas, None, 1, 0, 0)
         self.assertIsNone(canvas.model.selection)
+
+    def test_layer_drop_reparents_reorders_and_restores_with_undo(self):
+        canvas = CanvasHarness()
+        container = canvas.model.add_container(x=40, y=44)
+        first = canvas.model.add_text(75, 92)
+        canvas.model.set_properties(width=120)
+        second = canvas.model.add_text(80, 130)
+        canvas.model.set_properties(width=140)
+        row = SimpleNamespace(get_height=lambda: 40)
+        for item in (first, second):
+            self.assertTrue(StudioWindow.layer_drop(canvas, None, f"layer::{item.id}", 0, 20,
+                                                    (container.id, None), row))
+        self.assertEqual(container.items, [first, second])
+        self.assertEqual((first.x, first.y), (35, 48))
+        self.assertTrue(StudioWindow.layer_drop(canvas, None, f"layer:{container.id}:{first.id}", 0, 0,
+                                                (container.id, second.id), row))
+        self.assertEqual(container.items, [second, first])
+        self.assertTrue(StudioWindow.layer_drop(canvas, None, f"layer:{container.id}:{first.id}", 0, 10,
+                                                None, row))
+        self.assertIn(first, canvas.model.theme.items)
+        self.assertEqual((first.x, first.y), (75, 92))
+        canvas.model.theme.validate()
+        canvas.model.undo()
+        self.assertEqual([item.id for item in canvas.model.theme.containers[0].items], [second.id, first.id])
+
+    def test_marquee_moves_and_resizes_group_with_one_undo_per_gesture(self):
+        canvas = CanvasHarness()
+        first = canvas.model.add_text(40, 35)
+        second = canvas.model.add_text(80, 100)
+        self.assertEqual(len(canvas.model.theme.items), 2)
+        StudioWindow.drag_begin(canvas, None, 20, 20)
+        StudioWindow.drag_update(canvas, None, 600, 270)
+        StudioWindow.drag_end(canvas)
+        self.assertEqual(canvas.model.selections, ((None, first.id), (None, second.id)))
+        self.assertEqual(canvas.model.bounds(), (40, 35, 260, 101))
+        StudioWindow.drag_begin(canvas, None, 100, 90)
+        StudioWindow.drag_update(canvas, None, 60, 40)
+        StudioWindow.drag_end(canvas)
+        self.assertEqual(canvas.model.bounds(), (70, 55, 260, 101))
+        x, y, w, h = canvas.model.bounds()
+        StudioWindow.drag_begin(canvas, None, 2 * (x + w - 1), 2 * (y + h - 1))
+        StudioWindow.drag_update(canvas, None, 100, 40)
+        StudioWindow.drag_end(canvas)
+        self.assertEqual(canvas.model.bounds(), (70, 55, 310, 121))
+        canvas.model.theme.validate()
+        canvas.model.undo()
+        self.assertEqual([(item.x, item.y) for item in canvas.model.theme.items], [(70, 55), (110, 120)])

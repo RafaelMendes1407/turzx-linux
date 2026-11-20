@@ -13,6 +13,7 @@ from PIL import Image
 from . import service
 from .config import Config, load_config, save_config
 from .gui import box, label, window_header
+from .macro_editor import MacroEditor, emoji_menu
 from .metrics import CATEGORIES, disk_groups, is_numeric, metric_keys, reading, spec
 from .sensors import LiveSampler
 from .palette import groups as palette_groups, normalized
@@ -31,6 +32,8 @@ EDITOR_CSS = b"""
 .category-button { padding: 4px 8px; }
 .active-category, .active-category:hover { background: #235448; border-color: #5ab99b; }
 .active-category label { color: #b0ffdc; }
+.layer-root { padding: 8px; border: 1px dashed #586971; border-radius: 6px; }
+.layer-row:drop(active), .layer-root:drop(active) { outline: 2px solid #78e7bd; }
 .selected-layer { background: #244c43; color: #9cf4d1; }
 .disk-branch > title { border-radius: 6px; padding: 6px; }
 .disk-branch > title:hover { background: #303a42; }
@@ -95,6 +98,8 @@ class StudioWindow(Gtk.ApplicationWindow):
         self.library_refreshing = False
         self.zoom = 1.5
         self.dragging = False
+        self.marquee_start = None
+        self.marquee = None
         self.resize_drag = False
         self.drag_scale = 1
         self.tick_count = 0
@@ -142,6 +147,7 @@ class StudioWindow(Gtk.ApplicationWindow):
                 callback()
             file_actions.append(button(title, activate))
         toolbar.append(Gtk.MenuButton(label="Arquivo", popover=file_menu))
+        toolbar.append(emoji_menu(self.set_selected_emoji))
         spacer = box()
         spacer.set_hexpand(True)
         toolbar.append(spacer)
@@ -186,6 +192,9 @@ class StudioWindow(Gtk.ApplicationWindow):
         chart_selector.set_tooltip_text("Escolher tipo de gráfico")
         tools_row.append(chart_selector)
         components.append(tools_row)
+        container_button = button("Contêiner", lambda *_: self.add_container(), "component")
+        self.draggable(container_button, "container:")
+        components.append(container_button)
         categories = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
                                  min_children_per_line=2, max_children_per_line=2,
                                  row_spacing=5, column_spacing=5)
@@ -245,7 +254,10 @@ class StudioWindow(Gtk.ApplicationWindow):
         inspector_outer.set_size_request(286, -1)
         inspector_outer.append(label("PROPRIEDADES", "studio-section"))
         self.inspector = box(spacing=12)
-        inspector_outer.append(scroll(self.inspector))
+        self.inspector.set_margin_end(14)
+        inspector_scroll = scroll(self.inspector)
+        inspector_scroll.set_overlay_scrolling(False)
+        inspector_outer.append(inspector_scroll)
         body.append(inspector_outer)
 
         footer = box(False, 12)
@@ -328,9 +340,6 @@ class StudioWindow(Gtk.ApplicationWindow):
         for category, keys in groups.items():
             title = CATEGORIES[category]
             section = box(spacing=4)
-            add = button(f"＋ Contêiner {title}", lambda _, cat=category: self.add_container(cat), "component")
-            self.draggable(add, "container:" + category)
-            section.append(add)
             if category == "disk":
                 self.build_disk_tree(section, keys, bool(query))
             else:
@@ -626,12 +635,12 @@ class StudioWindow(Gtk.ApplicationWindow):
         except OSError as exc:
             self.show_message(str(exc))
 
-    def add_container(self, category, x=None, y=None):
+    def add_container(self, category=None, x=None, y=None):
         try:
             offset = 12 + len(self.model.theme.containers) % 6 * 16
             self.model.add_container(category, offset if x is None else x, offset if y is None else y)
             self.refresh()
-            self.show_message("Contêiner criado. Arraste informações para dentro dele ou clique na biblioteca.")
+            self.show_message("Contêiner criado. Arraste elementos sobre ele na aba Camadas.")
         except ValueError as exc:
             self.show_message(str(exc))
 
@@ -657,8 +666,8 @@ class StudioWindow(Gtk.ApplicationWindow):
         x, y, _ = self.point(x, y)
         if not (0 <= x < self.model.theme.width and 0 <= y < self.model.theme.height):
             return False
-        if payload.startswith("container:") and payload[10:] in CATEGORIES:
-            self.add_container(payload[10:], x, y)
+        if payload.startswith("container:") and (not payload[10:] or payload[10:] in CATEGORIES):
+            self.add_container(payload[10:] or None, x, y)
         elif payload == "free:text":
             self.add_text(x, y)
         elif payload.startswith("chart:") and payload[6:] in CHART_STYLES:
@@ -678,34 +687,62 @@ class StudioWindow(Gtk.ApplicationWindow):
         self.picture.grab_focus()
         return True
 
-    def drag_begin(self, _, x, y):
+    def drag_begin(self, gesture, x, y):
         self.picture.grab_focus()
         x, y, self.drag_scale = self.point(x, y)
         rect = self.model.bounds()
-        self.resize_drag = bool(rect and abs(x - (rect[0] + rect[2])) <= 12 and abs(y - (rect[1] + rect[3])) <= 12)
-        if not self.resize_drag:
-            self.model.selection = self.model.hit(x, y)
-        self.dragging = bool(self.model.selection)
-        self.model.begin_drag()
+        force_marquee = bool(gesture and gesture.get_current_event_state() & Gdk.ModifierType.SHIFT_MASK)
+        self.resize_drag = bool(not force_marquee and rect and rect[0] + rect[2] - 10 <= x <= rect[0] + rect[2] + 3
+                                and rect[1] + rect[3] - 10 <= y <= rect[1] + rect[3] + 3)
+        if force_marquee:
+            self.model.selection = None
+            self.marquee_start = (x, y)
+        elif not self.resize_drag:
+            hit = self.model.hit(x, y)
+            inside_group = (len(self.model.selections) > 1 and rect and
+                            rect[0] <= x < rect[0] + rect[2] and rect[1] <= y < rect[1] + rect[3])
+            if not inside_group:
+                self.model.selection = hit
+            self.marquee_start = (x, y) if not self.model.selections else None
+        else:
+            self.marquee_start = None
+        self.dragging = bool(self.model.selections)
+        if self.dragging:
+            self.model.begin_drag()
         self.refresh()
 
     def canvas_click(self, _, __, x, y):
         self.picture.grab_focus()
         x, y, _ = self.point(x, y)
         rect = self.model.bounds()
-        on_handle = bool(rect and abs(x - (rect[0] + rect[2])) <= 12 and abs(y - (rect[1] + rect[3])) <= 12)
-        if not on_handle:
+        on_handle = bool(rect and rect[0] + rect[2] - 10 <= x <= rect[0] + rect[2] + 3
+                         and rect[1] + rect[3] - 10 <= y <= rect[1] + rect[3] + 3)
+        inside_group = (len(self.model.selections) > 1 and rect and
+                        rect[0] <= x < rect[0] + rect[2] and rect[1] <= y < rect[1] + rect[3])
+        if not on_handle and not inside_group:
             self.model.selection = self.model.hit(x, y)
         self.refresh()
 
     def drag_update(self, _, dx, dy):
-        if self.dragging:
-            self.model.drag(dx / self.drag_scale, dy / self.drag_scale, self.resize_drag, 8 if self.grid.get_active() else 1)
+        dx, dy = dx / self.drag_scale, dy / self.drag_scale
+        if self.marquee_start:
+            x, y = self.marquee_start
+            self.marquee = (x, y, x + dx, y + dy)
+            previous = self.model.selections
+            self.model.select_rectangle(*self.marquee)
+            if self.model.selections != previous:
+                self.refresh()
+            else:
+                self.paint()
+        elif self.dragging:
+            self.model.drag(dx, dy, self.resize_drag, 8 if self.grid.get_active() else 1)
             self.refresh(False)
 
     def drag_end(self, *_):
         self.model.finish_drag()
         self.dragging = False
+        self.marquee_start = None
+        self.marquee = None
         self.refresh()
 
     def change_size(self, *_):
@@ -783,7 +820,7 @@ class StudioWindow(Gtk.ApplicationWindow):
             return
         try:
             self.last_image = render_theme(self.model.theme, snapshot)
-            preview = editor_preview(self.model, snapshot, self.grid.get_active())
+            preview = editor_preview(self.model, snapshot, self.grid.get_active(), self.marquee)
             texture = Gdk.MemoryTexture.new(w, h, Gdk.MemoryFormat.R8G8B8, GLib.Bytes.new(preview.tobytes()), w * 3)
             self.picture.set_paintable(texture)
         except (ValueError, OSError) as exc:
@@ -802,24 +839,70 @@ class StudioWindow(Gtk.ApplicationWindow):
         self.tick_count += 1
         state = service.status()
         count = len(self.sampler.latest.gpus) if self.sampler.latest else 0
-        self.canvas_caption.set_text(f"{count} GPU(s) detectada(s)  ·  {state['message']}\nArraste pelo título; redimensione pelo canto. Clique no fundo para editar o tema.")
+        self.canvas_caption.set_text(f"{count} GPU(s) detectada(s)  ·  {state['message']}\nArraste no fundo para selecionar vários elementos. Use o canto da seleção para redimensionar.")
         return True
+
+    def layer_drop(self, _, payload, __, y, destination, row):
+        if not isinstance(payload, str) or not payload.startswith("layer:"):
+            return False
+        parts = payload.split(":")
+        if len(parts) != 3:
+            return False
+        source = (parts[1] or None, parts[2] or None)
+        placement = "inside"
+        if destination is not None:
+            fraction = y / max(1, row.get_height())
+            if destination[1] or not .25 <= fraction <= .75:
+                placement = "above" if fraction < .5 else "below"
+        try:
+            if not self.model.move_layer(source, destination, placement):
+                return False
+        except ValueError as exc:
+            self.show_message(str(exc))
+            return False
+        self.refresh()
+        return True
+
+    def layer_target(self, widget, choice=None):
+        target = Gtk.DropTarget.new(str, Gdk.DragAction.MOVE)
+        target.connect("drop", self.layer_drop, choice, widget)
+        widget.add_controller(target)
 
     def build_layers(self):
         clear(self.layers)
-        if not self.model.theme.containers and not self.model.theme.items:
-            self.layers.append(label("Seu tema ainda está vazio.", "empty"))
-        for c in reversed(self.model.theme.top_level()):
-            rows = ([((None, c.id), ("▥  " if c.style in CHART_STYLES else "T  ") +
-                     (c.text if c.metric == "text" else c.label or spec(c.metric).label))] if isinstance(c, Item) else
-                    [((c.id, None), "▣  " + c.title)] + [((c.id, i.id), "    ↳ " + (i.label or spec(i.metric).label)) for i in c.items])
-            for selected, title in rows:
-                widget = button(title, lambda _, choice=selected: self.select(choice),
-                                "selected-layer" if selected == self.model.selection else "metric")
+        root = label("Nível principal", "layer-root")
+        root.set_tooltip_text("Solte aqui para retirar um elemento do contêiner.")
+        self.layer_target(root)
+        self.layers.append(root)
+        for element in reversed(self.model.theme.top_level()):
+            if isinstance(element, Item):
+                rows = [((None, element.id), element.text if element.metric == "text" else
+                         element.label or spec(element.metric).label)]
+            else:
+                rows = [((element.id, None), "▣  " + element.title)]
+                rows.extend(((element.id, item.id), "    ↳ " + (item.text if item.metric == "text" else
+                             item.label or spec(item.metric).label)) for item in reversed(element.items))
+            for choice, title in rows:
+                widget = button(title, lambda _, selected=choice: self.select(selected),
+                                "selected-layer" if choice in self.model.selections else "metric")
+                widget.add_css_class("layer-row")
                 widget.get_child().set_xalign(0)
                 widget.get_child().set_ellipsize(3)
                 widget.get_child().set_max_width_chars(24)
+                source = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
+                payload = f"layer:{choice[0] or ''}:{choice[1] or ''}"
+                source.set_content(Gdk.ContentProvider.new_for_value(payload))
+                widget.add_controller(source)
+                self.layer_target(widget, choice)
+                widget.set_tooltip_text("Solte no centro para inserir ou nas bordas para reordenar."
+                                        if choice[1] is None else "Arraste para mover ou reordenar.")
                 self.layers.append(widget)
+
+    def set_selected_emoji(self, emoji):
+        if self.model.selection:
+            self.perform(lambda: self.model.set_properties(emoji=emoji))
+        else:
+            self.show_message("Selecione um elemento ou contêiner para inserir o emoji.")
 
     def select(self, choice):
         self.model.selection = choice
@@ -828,6 +911,12 @@ class StudioWindow(Gtk.ApplicationWindow):
     def build_inspector(self):
         clear(self.inspector)
         self.inspector_spins = {}
+        if len(self.model.selections) > 1:
+            self.inspector.append(label(f"{len(self.model.selections)} elementos selecionados", "inspector-title"))
+            hint = label("Arraste a seleção para mover. Arraste o canto inferior direito para redimensionar.", "muted")
+            hint.set_wrap(True)
+            self.inspector.append(hint)
+            return
         c, item = self.model.selected()
         target = item or c or self.model.theme
         context = (self.model.theme.id, self.model.selection)
@@ -894,6 +983,14 @@ class StudioWindow(Gtk.ApplicationWindow):
                 self.inspector.append(button("↑ Selecionar contêiner", lambda *_: self.select((c.id, None))))
             self.build_metric_selectors(item, field, update)
             entry("Rótulo (vazio = automático)", "label")
+            field("Emoji do elemento", emoji_menu(lambda emoji: update("emoji", emoji, True), item.emoji or "Escolher emoji"))
+            macro_title = f"Macros de aparência ({len(item.macros)})" if item.macros else "Macros de aparência…"
+
+            def edit_macros(*_):
+                dialog = MacroEditor(self, item, self.all_metrics(), lambda rules: update("macros", rules, True))
+                dialog.present()
+
+            self.inspector.append(button(macro_title, edit_macros))
             if item.metric == "text":
                 entry("Texto", "text", 150)
             styles = {key: name for key, name in STYLES.items() if key not in CHART_STYLES or is_numeric(item.metric)}
@@ -949,6 +1046,7 @@ class StudioWindow(Gtk.ApplicationWindow):
                 self.inspector.append(live)
         else:
             entry("Título", "title")
+            field("Emoji do título", emoji_menu(lambda emoji: update("emoji", emoji, True), c.emoji or "Escolher emoji"))
             toggle("Mostrar título", "show_title")
             if c.category == "gpu" or any(i.metric.startswith("gpu.") for i in c.items):
                 gpus = self.sampler.latest.gpus if self.sampler.latest else []

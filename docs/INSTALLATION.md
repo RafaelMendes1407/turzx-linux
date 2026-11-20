@@ -21,7 +21,7 @@ turzx-linux --diagnose
 Para instalar um pacote já construído:
 
 ```bash
-sudo apt install ./dist/turzx-linux_1.2.0_all.deb
+sudo apt install ./dist/turzx-linux_1.3.0_all.deb
 ```
 
 O driver `cdc_acm` vem com o kernel. O pacote tenta carregá-lo e configura acesso

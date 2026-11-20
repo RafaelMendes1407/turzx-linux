@@ -53,9 +53,10 @@ nomes de hardware, hora e data não são fontes de gráficos.
 
 ## Contêineres e GPUs
 
-Escolha uma categoria e arraste **＋ Contêiner**. Insira leituras dentro dele;
-seus filhos se movem junto com o grupo. Arraste pelo título ou selecione o grupo
-em Camadas. **Opacidade do fundo** regula a cor de fundo. **Opacidade do painel**
+Clique ou arraste **Contêiner** em **Componentes**. Na aba **Camadas**, solte
+um elemento no centro da linha do contêiner para colocá-lo dentro. Use as
+bordas das linhas para mudar a ordem e **Nível principal** para retirar um
+elemento do contêiner. Os filhos se movem junto com o contêiner. **Opacidade do fundo** regula a cor de fundo. **Opacidade do painel**
 regula o contêiner inteiro, incluindo título, borda e leituras.
 
 Um contêiner GPU permite escolher a placa. Cada leitura ou gráfico GPU pode
@@ -125,3 +126,25 @@ para enviar o tema ao USB.
 
 **Reiniciar painel** encerra o processo de transmissão e o inicia novamente com
 a configuração aplicada.
+
+## Seleção múltipla
+
+Arraste uma caixa a partir do fundo da prévia. Segure **Shift** para iniciar a
+caixa sobre um elemento, por exemplo para selecionar leituras dentro de um
+contêiner. Depois, arraste a seleção para mover o conjunto ou use o canto
+inferior direito para redimensioná-lo. **Esc** limpa a seleção.
+
+## Emojis e macros de aparência
+
+Abra **Emojis** na barra do Studio ou no inspetor para escolher um ícone. O
+emoji acompanha o rótulo da métrica, o texto livre ou o título do contêiner.
+Para ver emojis coloridos na prévia e no USB, instale a fonte **Noto Color
+Emoji**. O pacote Debian inclui essa dependência.
+
+Em **Propriedades → Macros de aparência**, adicione uma regra, escolha qual
+leitura ela acompanha e defina a condição. Por exemplo, use **CPU →
+Temperatura ≥ 80 °C** para trocar 🌡️ por 🔥 e deixar a barra vermelha.
+Uma regra pode mudar a cor da barra ou do gráfico, do valor e do rótulo.
+A primeira condição atendida tem prioridade. Se nenhuma regra for atendida,
+o elemento usa a aparência definida nas propriedades. Use **Subir** e
+**Descer** para definir a ordem.

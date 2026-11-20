@@ -4,6 +4,7 @@ import math
 
 from PIL import Image, ImageDraw
 
+from .emojis import draw_caption
 from .metrics import history_key, raw_value, reading, spec
 from .render import font
 
@@ -27,9 +28,7 @@ def render_circle(item, metrics, gpu_id):
     if item.show_label:
         caption = font(intro - 3, False, item.font_family)
         label = item.label or spec(item.metric).label
-        while label and draw.textlength(label, font=caption) > w:
-            label = label[:-1]
-        draw.text((w / 2, 0), label, font=caption, fill=item.label_color, anchor="mt")
+        draw_caption(image, draw, (w / 2, 0), label, caption, w, item.label_color, item.emoji, "mt")
 
     diameter = min(w, h - intro) - 4
     x, y = (w - diameter) / 2, intro + (h - intro - diameter) / 2
@@ -72,9 +71,7 @@ def render_chart(item, metrics, gpu_id):
     small = font(caption_size, False, item.font_family)
     label = item.label or spec(item.metric).label
     if item.show_label:
-        while label and draw.textlength(label, font=small) > w * .54:
-            label = label[:-1]
-        draw.text((0, 0), label, font=small, fill=item.label_color)
+        draw_caption(image, draw, (0, 0), label, small, w * .54, item.label_color, item.emoji)
     value = current.text
     while value and draw.textlength(value, font=small) > (w * .45 if item.show_label else w):
         value = value[:-1]

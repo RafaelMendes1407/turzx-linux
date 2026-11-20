@@ -1,5 +1,15 @@
 # Histórico de alterações
 
+## 1.3.0
+
+- Controles de janela revistos e ação para reiniciar a transmissão USB.
+- Gráficos circulares e controles separados de opacidade do fundo e do painel.
+- Árvore de discos e volumes com rótulos, métricas de uso e seleção em etapas.
+- Contêineres independentes, reorganização e agrupamento por arrastar em Camadas.
+- Seleção múltipla na prévia para mover e redimensionar elementos em grupo.
+- Mais espaço entre o inspetor e a barra de rolagem.
+- Menu com 23 emojis e macros para trocar ícones e cores conforme a leitura.
+
 ## 1.2.0
 
 - Textos, leituras e gráficos livres sobre o fundo, sem exigir contêineres.

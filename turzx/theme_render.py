@@ -2,6 +2,8 @@
 
 from PIL import Image, ImageChops, ImageDraw
 
+from .emojis import draw_caption
+from .macros import apply_macros
 from .metrics import reading, spec
 from .render import font
 from .themes import Item, decode_background
@@ -18,6 +20,8 @@ def ellipsis(draw, text, face, width):
 
 def render_item(item, metrics, gpu_id):
     gpu_id = gpu_id if item.gpu_id == "inherit" else item.gpu_id
+    if item.macros:
+        item = apply_macros(item, metrics, gpu_id)
     if item.style.startswith("chart_"):
         return render_chart(item, metrics, gpu_id)
     image = Image.new("RGBA", (item.width, item.height))
@@ -30,15 +34,26 @@ def render_item(item, metrics, gpu_id):
     if item.style == "line":
         value_width = min(w, max(w * .45, d.textlength(value.text, font=value_font)))
         if item.show_label and item.metric != "text":
-            left = ellipsis(d, label, label_font, max(0, w - value_width - 6))
-            d.text((0, h / 2), left, font=label_font, fill=item.label_color, anchor="lm")
+            available = max(0, w - value_width - 6)
+            if item.emoji:
+                draw_caption(image, d, (0, h / 2), label, label_font, available, item.label_color, item.emoji, "lm")
+            else:
+                left = ellipsis(d, label, label_font, available)
+                d.text((0, h / 2), left, font=label_font, fill=item.label_color, anchor="lm")
         shown = ellipsis(d, value.text, value_font, value_width if item.show_label else w)
         anchor = "r" if item.show_label and item.metric != "text" else {"left": "l", "center": "m", "right": "r"}[item.align]
-        d.text(({"l": 0, "m": w / 2, "r": w}[anchor], h / 2), shown, font=value_font, fill=item.color, anchor=anchor + "m")
+        xy = ({"l": 0, "m": w / 2, "r": w}[anchor], h / 2)
+        if item.metric == "text" and item.emoji:
+            draw_caption(image, d, xy, value.text, value_font, w, item.color, item.emoji, anchor + "m")
+        else:
+            d.text(xy, shown, font=value_font, fill=item.color, anchor=anchor + "m")
     else:
         y = 0
         if item.show_label:
-            d.text((0, 0), ellipsis(d, label, label_font, w), font=label_font, fill=item.label_color)
+            if item.emoji and item.metric != "text":
+                draw_caption(image, d, (0, 0), label, label_font, w, item.label_color, item.emoji)
+            else:
+                d.text((0, 0), ellipsis(d, label, label_font, w), font=label_font, fill=item.label_color)
             y = 15
         face = value_font
         size = item.font_size
@@ -47,7 +62,11 @@ def render_item(item, metrics, gpu_id):
             size -= 1
             face = font(size, item.bold, item.font_family)
         anchor = {"left": "l", "center": "m", "right": "r"}[item.align]
-        d.text(({"l": 0, "m": w / 2, "r": w}[anchor], y), ellipsis(d, value.text, face, w), font=face, fill=item.color, anchor=anchor + "t")
+        xy = ({"l": 0, "m": w / 2, "r": w}[anchor], y)
+        if item.metric == "text" and item.emoji:
+            draw_caption(image, d, xy, value.text, face, w, item.color, item.emoji, anchor + "t")
+        else:
+            d.text(xy, ellipsis(d, value.text, face, w), font=face, fill=item.color, anchor=anchor + "t")
         if item.style == "bar" and h >= 24:
             d.rounded_rectangle((0, h - 5, w - 1, h - 1), radius=2, fill="#324156")
             if value.percent is not None and value.percent > 0:
@@ -72,7 +91,10 @@ def render_theme(theme, metrics):
                             fill=rgb + (c.opacity,), outline=c.border if c.border_width else None, width=c.border_width)
         if c.show_title:
             face = font(c.title_size, True)
-            d.text((10, 9), ellipsis(d, c.title, face, c.width - 20), font=face, fill=c.foreground)
+            if c.emoji:
+                draw_caption(panel, d, (10, 9), c.title, face, c.width - 20, c.foreground, c.emoji)
+            else:
+                d.text((10, 9), ellipsis(d, c.title, face, c.width - 20), font=face, fill=c.foreground)
         for item in c.items:
             panel.alpha_composite(render_item(item, metrics, c.gpu_id), (item.x, item.y))
         mask = Image.new("L", panel.size)
@@ -85,7 +107,7 @@ def render_theme(theme, metrics):
     return image.convert("RGB")
 
 
-def editor_preview(model, metrics, grid=True):
+def editor_preview(model, metrics, grid=True, marquee=None):
     image = render_theme(model.theme, metrics).convert("RGBA")
     overlay = Image.new("RGBA", image.size)
     d = ImageDraw.Draw(overlay)
@@ -104,11 +126,18 @@ def editor_preview(model, metrics, grid=True):
     for x, y, w, h in rectangles:
         for px, py in ((x, y), (x + w - 1, y), (x, y + h - 1), (x + w - 1, y + h - 1)):
             d.rectangle((px - 1, py - 1, px + 1, py + 1), fill="#c6dcee", outline="#112031")
+    if len(model.selections) > 1:
+        for x, y, w, h in model.selection_rectangles():
+            d.rectangle((x, y, x + w - 1, y + h - 1), outline="#78e7bd")
     rect = model.bounds()
-    if rect:
+    if rect and marquee is None:
         x, y, w, h = rect
         d.rectangle((x, y, x + w - 1, y + h - 1), outline="#78e7bd", width=2)
         d.rectangle((x + w - 9, y + h - 9, x + w - 1, y + h - 1), fill="#78e7bd", outline="#11231f")
         d.line((x + w // 2, 0, x + w // 2, image.height), fill=(110, 231, 183, 80))
         d.line((0, y + h // 2, image.width, y + h // 2), fill=(110, 231, 183, 80))
+    if marquee is not None:
+        x1, y1, x2, y2 = marquee
+        d.rectangle((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)),
+                    fill=(120, 231, 189, 34), outline="#78e7bd")
     return Image.alpha_composite(image, overlay).convert("RGB")

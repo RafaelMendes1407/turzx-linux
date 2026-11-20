@@ -13,6 +13,8 @@ import uuid
 from PIL import Image, ImageOps
 
 from .config import atomic_write, config_dir
+from .emojis import EMOJIS
+from .macros import MAX_MACROS, Macro
 from .metrics import CATEGORIES, is_numeric, spec
 
 SIZES = ((480, 320), (320, 480))
@@ -35,6 +37,11 @@ def color(value):
     if not isinstance(value, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
         raise ValueError("Cor inválida; use #RRGGBB.")
     return value
+
+
+def validate_emoji(value):
+    if not isinstance(value, str) or (value and value not in EMOJIS):
+        raise ValueError("Escolha um emoji do menu.")
 
 
 def integer(value, lo, hi, label):
@@ -72,6 +79,8 @@ class Item:
     chart_max: float = 0
     chart_line_width: int = 2
     chart_grid: bool = True
+    emoji: str = ""
+    macros: list[Macro] = field(default_factory=list)
 
 
 @dataclass
@@ -95,6 +104,7 @@ class Container:
     items: list[Item] = field(default_factory=list)
     z: int = 0
     panel_opacity: int = 255
+    emoji: str = ""
 
 
 @dataclass
@@ -139,6 +149,7 @@ class Theme:
                 raise ValueError("Contêiner inválido ou identificador duplicado.")
             ids.add(c.id)
             text_value(c.title, 60, "Título")
+            validate_emoji(c.emoji)
             if not isinstance(c.category, str) or c.category not in CATEGORIES:
                 raise ValueError("Categoria inválida.")
             integer(c.width, 96, self.width, "Largura do contêiner")
@@ -196,6 +207,13 @@ def validate_item(item, width, height):
         raise ValueError("Grade do gráfico inválida.")
     if item.style in CHART_STYLES and not is_numeric(item.metric):
         raise ValueError("Gráficos precisam de uma informação numérica, como uso, temperatura ou velocidade de rede.")
+    validate_emoji(item.emoji)
+    if not isinstance(item.macros, list) or len(item.macros) > MAX_MACROS:
+        raise ValueError(f"Um elemento pode ter até {MAX_MACROS} macros.")
+    for rule in item.macros:
+        if not isinstance(rule, Macro):
+            raise ValueError("Macro inválida.")
+        rule.validate(color)
     text_value(item.label, 60, "Rótulo")
     text_value(item.text, 150, "Texto")
     text_value(item.gpu_id, 128, "GPU")
@@ -250,8 +268,9 @@ def from_dict(data):
     free = data.pop("items", [])
     if not isinstance(free, list):
         raise ValueError("Lista de elementos livres inválida.")
-    theme = construct(Theme, data, ("containers", Container, ("items", Item, None)))
-    theme.items = [construct(Item, item) for item in free]
+    macro_children = ("macros", Macro, None)
+    theme = construct(Theme, data, ("containers", Container, ("items", Item, macro_children)))
+    theme.items = [construct(Item, item, macro_children) for item in free]
     return theme.validate()
 
 
@@ -372,20 +391,62 @@ class EditorModel:
             self.theme = self.redo_stack.pop()
             self.selection = None
 
-    def selected(self):
-        if self.selection:
-            if self.selection[0] is None:
-                return None, next((i for i in self.theme.items if i.id == self.selection[1]), None)
-            for c in self.theme.containers:
-                if c.id == self.selection[0]:
-                    return c, next((i for i in c.items if i.id == self.selection[1]), None)
+    @property
+    def selection(self):
+        return self.selections[0] if len(self.selections) == 1 else None
+
+    @selection.setter
+    def selection(self, choice):
+        self.selections = (choice,) if choice else ()
+
+    def resolve(self, choice):
+        if choice:
+            parent_id, item_id = choice
+            if parent_id is None:
+                return None, next((i for i in self.theme.items if i.id == item_id), None)
+            for container in self.theme.containers:
+                if container.id == parent_id:
+                    return container, next((i for i in container.items if i.id == item_id), None)
         return None, None
 
+    def selected(self):
+        return self.resolve(self.selection)
+
+    def selection_rectangles(self):
+        for choice in self.selections:
+            container, item = self.resolve(choice)
+            if item:
+                yield (item.x + (container.x if container else 0),
+                       item.y + (container.y if container else 0), item.width, item.height)
+            elif container:
+                yield container.x, container.y, container.width, container.height
+
     def bounds(self):
-        c, item = self.selected()
-        if item:
-            return ((c.x if c else 0) + item.x, (c.y if c else 0) + item.y, item.width, item.height)
-        return (c.x, c.y, c.width, c.height) if c else None
+        rectangles = list(self.selection_rectangles())
+        if rectangles:
+            left = min(x for x, _, _, _ in rectangles)
+            top = min(y for _, y, _, _ in rectangles)
+            return (left, top, max(x + w for x, _, w, _ in rectangles) - left,
+                    max(y + h for _, y, _, h in rectangles) - top)
+        return None
+
+    def select_rectangle(self, x1, y1, x2, y2):
+        left, right = sorted((x1, x2))
+        top, bottom = sorted((y1, y2))
+
+        def intersects(item, x=0, y=0):
+            return (left < x + item.x + item.width and right > x + item.x and
+                    top < y + item.y + item.height and bottom > y + item.y)
+
+        choices = [(None, item.id) for item in self.theme.items if intersects(item)]
+        for container in self.theme.containers:
+            if (left <= container.x and top <= container.y and
+                    right >= container.x + container.width and bottom >= container.y + container.height):
+                choices.append((container.id, None))
+            else:
+                choices.extend((container.id, item.id) for item in container.items
+                               if intersects(item, container.x, container.y))
+        self.selections = tuple(choices)
 
     def hit(self, x, y, containers_only=False):
         for c in reversed(self.theme.top_level()):
@@ -407,11 +468,12 @@ class EditorModel:
             element.z = index
         return len(objects)
 
-    def add_container(self, category, x=12, y=12):
-        if category not in CATEGORIES or len(self.theme.containers) >= 32:
+    def add_container(self, category=None, x=12, y=12):
+        if (category is not None and category not in CATEGORIES) or len(self.theme.containers) >= 32:
             raise ValueError("Não é possível adicionar esse contêiner.")
         self.checkpoint()
-        c = Container(title=CATEGORIES[category].upper(), category=category, x=round(x), y=round(y))
+        c = Container(title=CATEGORIES[category].upper() if category else "Contêiner",
+                      category=category or "system", x=round(x), y=round(y))
         c.z = self.next_z()
         contain_rect(c, *self.theme.size, minimum=(96, 64))
         self.theme.containers.append(c)
@@ -485,6 +547,51 @@ class EditorModel:
                 self.theme.containers.append(clone)
                 self.selection = clone.id, None
 
+    def move_layer(self, source, destination=None, placement="inside"):
+        source_parent, source_item = self.resolve(source)
+        dest_parent, dest_item = self.resolve(destination)
+        target = source_item if source[1] else source_parent
+        anchor = (dest_item if destination[1] else dest_parent) if destination else None
+        if target is None or (destination and anchor is None) or target is anchor:
+            return False
+        if placement == "inside" and isinstance(anchor, Item):
+            return False
+        old_parent = source_parent if source_item else None
+        new_parent = dest_parent if placement == "inside" or dest_item else None
+        if new_parent and not source_item:
+            return False
+        origin = old_parent.items if old_parent else self.theme.top_level()
+        siblings = new_parent.items if new_parent else self.theme.top_level()
+        order = [element for element in siblings if element is not target]
+        index = len(order)
+        if anchor is not None and placement != "inside":
+            index = order.index(anchor) + (placement == "above")
+        order.insert(index, target)
+        if new_parent is old_parent and order == origin:
+            return False
+        if new_parent is not old_parent:
+            limit = 32 if new_parent else 128
+            if len(new_parent.items if new_parent else self.theme.items) >= limit:
+                raise ValueError("O destino atingiu o limite de elementos.")
+        self.checkpoint()
+        if new_parent is not old_parent:
+            (old_parent.items if old_parent else self.theme.items).remove(target)
+            if new_parent is None:
+                self.theme.items.append(target)
+            target.x += (old_parent.x if old_parent else 0) - (new_parent.x if new_parent else 0)
+            target.y += (old_parent.y if old_parent else 0) - (new_parent.y if new_parent else 0)
+            if old_parent and target.gpu_id == "inherit":
+                target.gpu_id = old_parent.gpu_id
+            contain_rect(target, *((new_parent.width, new_parent.height) if new_parent else self.theme.size),
+                         minimum_size(target))
+        if new_parent:
+            new_parent.items[:] = order
+        else:
+            for z, element in enumerate(order):
+                element.z = z
+        self.selection = (new_parent.id if new_parent else None, target.id) if source_item else (target.id, None)
+        return True
+
     def layer(self, offset):
         c, item = self.selected()
         if c or item:
@@ -546,10 +653,13 @@ class EditorModel:
         self.drag_origin = deepcopy(self.theme)
 
     def drag(self, dx, dy, resize=False, grid=1):
-        if self.drag_origin is None or not self.selection:
+        if self.drag_origin is None or not self.selections:
             return
         self.theme = deepcopy(self.drag_origin)
         if dx == 0 and dy == 0:
+            return
+        if len(self.selections) > 1:
+            self.drag_group(dx, dy, resize, grid)
             return
         c, item = self.selected()
         if c is None and item is None:
@@ -568,6 +678,40 @@ class EditorModel:
         contain_rect(target, pw, ph, minimum_size(item) if item else (96, 64))
         if resize and c and not item:
             resize_children(c, old)
+
+    def drag_group(self, dx, dy, resize, grid):
+        left, top, width, height = self.bounds()
+        dx, dy = round(dx / grid) * grid, round(dy / grid) * grid
+        targets = []
+        for choice in self.selections:
+            container, item = self.resolve(choice)
+            parent = container if item else None
+            target = item or container
+            limits = (parent.width, parent.height) if parent else self.theme.size
+            targets.append((target, parent, limits))
+        if not resize:
+            dx = max(max(-target.x for target, _, _ in targets),
+                     min(dx, min(w - target.x - target.width for target, _, (w, _) in targets)))
+            dy = max(max(-target.y for target, _, _ in targets),
+                     min(dy, min(h - target.y - target.height for target, _, (_, h) in targets)))
+            for target, _, _ in targets:
+                target.x += dx
+                target.y += dy
+            return
+
+        sx = min(self.theme.width - left, max(1, width + dx)) / width
+        sy = min(self.theme.height - top, max(1, height + dy)) / height
+        for target, parent, (pw, ph) in targets:
+            px, py = (parent.x, parent.y) if parent else (0, 0)
+            old_size = target.width, target.height
+            target.x = round(left + (px + target.x - left) * sx) - px
+            target.y = round(top + (py + target.y - top) * sy) - py
+            target.width = round(target.width * sx)
+            target.height = round(target.height * sy)
+            minimum = minimum_size(target) if isinstance(target, Item) else (96, 64)
+            contain_rect(target, pw, ph, minimum)
+            if isinstance(target, Container):
+                resize_children(target, old_size)
 
     def finish_drag(self):
         if self.drag_origin is not None and self.theme != self.drag_origin:
