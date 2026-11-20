@@ -4,7 +4,7 @@ import math
 
 from PIL import Image, ImageDraw
 
-from .metrics import history_key, reading, spec
+from .metrics import history_key, raw_value, reading, spec
 from .render import font
 
 
@@ -19,7 +19,51 @@ def short_number(value, key):
     return f"{value:.0f}" if value >= 10 else f"{value:.1f}"
 
 
+def render_circle(item, metrics, gpu_id):
+    image = Image.new("RGBA", (item.width, item.height))
+    draw = ImageDraw.Draw(image)
+    w, h = image.size
+    intro = max(12, min(20, item.font_size + 3)) if item.show_label else 0
+    if item.show_label:
+        caption = font(intro - 3, False, item.font_family)
+        label = item.label or spec(item.metric).label
+        while label and draw.textlength(label, font=caption) > w:
+            label = label[:-1]
+        draw.text((w / 2, 0), label, font=caption, fill=item.label_color, anchor="mt")
+
+    diameter = min(w, h - intro) - 4
+    x, y = (w - diameter) / 2, intro + (h - intro - diameter) / 2
+    bounds = (x, y, x + diameter, y + diameter)
+    thickness = item.chart_line_width + 2
+    draw.ellipse(bounds, outline=(155, 180, 207, 70), width=thickness)
+
+    current = reading(item.metric, metrics, gpu_id)
+    value = raw_value(item.metric, metrics, gpu_id)
+    maximum = item.chart_max
+    if not maximum:
+        samples = metrics.history.get(history_key(item.metric, metrics, gpu_id), ())
+        maximum = 100 if spec(item.metric).unit == "%" else max(
+            [1, value or 0] + [sample for _, sample in samples if sample is not None]
+        )
+    if value is not None and value > 0:
+        draw.arc(bounds, -90, -90 + 360 * min(value / maximum, 1), fill=item.accent, width=thickness)
+
+    size = min(item.font_size, diameter // 3)
+    face = font(size, item.bold, item.font_family)
+    inner_width = diameter - 2 * thickness - 4
+    while size > 8 and draw.textlength(current.text, font=face) > inner_width:
+        size -= 1
+        face = font(size, item.bold, item.font_family)
+    text = current.text
+    if draw.textlength(text, font=face) > inner_width and value is not None:
+        text = short_number(value, item.metric)
+    draw.text((w / 2, y + diameter / 2), text, font=face, fill=item.color, anchor="mm")
+    return image
+
+
 def render_chart(item, metrics, gpu_id):
+    if item.style == "chart_circle":
+        return render_circle(item, metrics, gpu_id)
     image = Image.new("RGBA", (item.width, item.height))
     draw = ImageDraw.Draw(image)
     w, h = image.size

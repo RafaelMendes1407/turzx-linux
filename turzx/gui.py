@@ -19,30 +19,34 @@ from .sensors import LiveSampler
 from .themes import list_themes, load_theme
 
 CSS = b"""
-window { background: #0c111b; color: #e7edf5; }
+window { background: #15191d; color: #e7edf5; }
 window label, button label, dropdown label, checkbutton label, expander label,
 popover label, listview label, entry text, spinbutton text, textview text, scale value { color: #edf4fc; }
-entry, spinbutton, dropdown > button { background: #1b293c; color: #edf4fc; border: 1px solid #52677f; }
-popover contents, listview { background: #172337; color: #edf4fc; }
-listview row { background: #172337; color: #edf4fc; }
+entry, spinbutton, dropdown > button { background: #252d33; color: #edf4fc; border: 1px solid #46535c; }
+popover contents, listview { background: #252d33; color: #edf4fc; }
+listview row { background: #252d33; color: #edf4fc; }
 listview row:selected, selection { background: #315d81; color: #ffffff; }
-button { background: #24354c; color: #edf4fc; border: 1px solid #425874; }
-button:hover { background: #304661; }
+button { background: #2b343b; color: #edf4fc; border: 1px solid #414d56; }
+button:hover { background: #39454e; }
 button:disabled, button:disabled label { color: #a7b7cb; }
 entry placeholder, .dim-label { color: #b2c2d6; }
-headerbar { background: #101722; border-bottom: 1px solid #253044; }
-.brand { font-size: 15px; font-weight: 800; letter-spacing: 2px; }
-.badge { background: #1c302d; color: #78dfbc; border-radius: 12px; padding: 4px 10px; font-size: 10px; }
-.sidebar { background: #111a28; border-right: 1px solid #253044; padding: 20px; }
-.heading { font-size: 24px; font-weight: 800; }
+headerbar { background: #20262b; border-bottom: 1px solid #323b42; }
+.brand { font-size: 15px; font-weight: 700; }
+.sidebar { background: #20262b; border-right: 1px solid #323b42; padding: 20px; }
 .section { font-size: 15px; font-weight: 700; }
 .muted { color: #9baec4; font-size: 12px; }
 .field-label { color: #c4d1e2; font-size: 12px; }
 .preview-shell { background: #05080e; border: 2px solid #2b374a; border-radius: 22px; padding: 20px; }
-.status { background: #141f2d; border-radius: 12px; padding: 14px; }
+.status { background: #232b30; border-radius: 12px; padding: 14px; }
 .connected { color: #79e7be; }
-.actions { border-top: 1px solid #253044; padding: 14px 22px; background: #101722; }
+.actions { border-top: 1px solid #323b42; padding: 14px 22px; background: #20262b; }
 button { border-radius: 8px; padding: 8px 12px; }
+headerbar { min-height: 44px; padding: 0 10px; }
+.window-actions { margin-left: 8px; }
+.window-actions button { padding: 0; min-width: 36px; min-height: 34px; border: 0; background: transparent; }
+.window-actions button:hover { background: #34404a; }
+.window-actions button.close:hover { background: #a53b43; color: #fff; }
+scale slider { min-width: 14px; min-height: 14px; }
 button.suggested-action { background: #73dfb7; color: #0b241c; font-weight: 700; }
 button.suggested-action label { color: #0b241c; }
 entry, dropdown, spinbutton { border-radius: 7px; min-height: 32px; }
@@ -63,6 +67,39 @@ def box(vertical=True, spacing=10):
     return Gtk.Box(orientation=Gtk.Orientation.VERTICAL if vertical else Gtk.Orientation.HORIZONTAL, spacing=spacing)
 
 
+def window_header(window, title):
+    header = Gtk.HeaderBar(show_title_buttons=False)
+    header.set_title_widget(label(title, "brand"))
+    controls = box(False, 3)
+    controls.add_css_class("window-actions")
+
+    def control(icon, title, callback, css):
+        widget = Gtk.Button(icon_name=icon, tooltip_text=title)
+        widget.add_css_class(css)
+        widget.connect("clicked", lambda *_: callback())
+        controls.append(widget)
+        return widget
+
+    control("window-minimize-symbolic", "Minimizar", window.minimize, "minimize")
+    def toggle_maximize():
+        if window.is_maximized():
+            window.unmaximize()
+        else:
+            window.maximize()
+
+    maximize = control("window-maximize-symbolic", "Maximizar", toggle_maximize, "maximize")
+
+    def update_maximize(*_):
+        maximized = window.is_maximized()
+        maximize.set_icon_name("window-restore-symbolic" if maximized else "window-maximize-symbolic")
+        maximize.set_tooltip_text("Restaurar" if maximized else "Maximizar")
+    window.connect("notify::maximized", update_maximize)
+    control("window-close-symbolic", "Fechar", window.close, "close")
+    header.pack_end(controls)
+    window.set_titlebar(header)
+    return header
+
+
 class Window(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Turzx Linux")
@@ -77,13 +114,10 @@ class Window(Gtk.ApplicationWindow):
             self.config = Config()
             initial_error = str(exc)
         self.image_path = self.config.image_path
-        header = Gtk.HeaderBar()
-        header.set_title_widget(label("TURZX  /  LINUX", "brand"))
-        header.pack_start(label("3,5″ USB", "badge"))
+        header = window_header(self, "Configuração USB")
         editor_button = Gtk.Button(label="Editor de temas")
-        editor_button.connect("clicked", lambda *_: app.do_activate())
-        header.pack_end(editor_button)
-        self.set_titlebar(header)
+        editor_button.connect("clicked", lambda *_: app.activate())
+        header.pack_start(editor_button)
         root = box(spacing=0)
         self.set_child(root)
         body = box(False, 0)
@@ -134,8 +168,6 @@ class Window(Gtk.ApplicationWindow):
         content_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         content_scroll.set_child(content)
         body.append(content_scroll)
-        content.append(label("Sua tela, do seu jeito.", "heading"))
-        content.append(label("Acompanhe seu Linux em um espaço só seu.", "muted"))
         self.preview_title = label("PRÉVIA AO VIVO  ·  480 × 320", "muted")
         self.preview_title.set_margin_top(10)
         content.append(self.preview_title)
@@ -180,6 +212,9 @@ class Window(Gtk.ApplicationWindow):
         stop_button = Gtk.Button(label="Parar painel")
         stop_button.connect("clicked", self.stop)
         actions.append(stop_button)
+        restart_button = Gtk.Button(label="Reiniciar painel")
+        restart_button.connect("clicked", self.restart)
+        actions.append(restart_button)
         apply_button = Gtk.Button(label="Aplicar e iniciar")
         apply_button.add_css_class("suggested-action")
         apply_button.connect("clicked", self.apply)
@@ -295,6 +330,13 @@ class Window(Gtk.ApplicationWindow):
             self.feedback.set_text("Parando o painel e apagando a tela…")
         else:
             self.feedback.set_text("O painel já está parado.")
+
+    def restart(self, *_):
+        try:
+            service.start(restart=True)
+            self.feedback.set_text("Reiniciando o painel com a configuração aplicada…")
+        except OSError as exc:
+            self.feedback.set_text(str(exc))
 
     def test_colors(self, *_):
         if not self.screen_switch.get_active():
@@ -432,23 +474,40 @@ class Application(Gtk.Application):
                 if container.items:
                     self.window.select((container.id, container.items[0].id))
             # Exercise free elements and every new inspector with real GTK widgets.
-            from .themes import EditorModel, Theme
+            from .themes import CHART_STYLES, EditorModel, Theme
             self.window.model = EditorModel(Theme())
             self.window.model.add_text()
             self.window.refresh()
             for category, metric in (("memory", "memory.usage"), ("network", "network.download"), ("gpu", "gpu.usage")):
                 self.window.choose_category(category)
                 assert self.window.palette.get_first_child() is not None
-                for style in ("chart_line", "chart_area", "chart_bars"):
+                for style in CHART_STYLES:
                     self.window.model.add_chart(style, key=metric)
                     self.window.refresh()
                     assert "chart_max" in self.window.inspector_spins
             self.window.grid.set_active(False)
             self.window.paint()
             self.window.select(None)
+            self.window.choose_category("disk")
+            assert self.window.palette.get_first_child() is not None
             self.open_settings()
+            settings = self.settings_window
+            settings.close()
+            assert settings not in self.get_windows()
+            self.open_settings()
+            assert self.settings_window is not settings
+            self.window.close()
+            dialog = self.window.discard_dialog
+            assert dialog is not None
+            self.window.close()
+            assert self.window.discard_dialog is dialog
+            dialog.response(Gtk.ResponseType.CANCEL)
+            assert self.window in self.get_windows() and self.window.discard_dialog is None
+            self.window.close()
+            self.window.discard_dialog.response(Gtk.ResponseType.REJECT)
+            assert self.window not in self.get_windows()
             self.smoke_completed = True
-            print("GTK: editor, textos livres, gráficos, CPU/GPU/RAM/rede, configuração USB e prévia renderizados com sucesso.")
+            print("GTK: editor, gráficos, discos, configuração USB, prévia e fechamento verificados.")
         except Exception as exc:
             self.failure = str(exc) or "A interface não concluiu o teste visual."
         finally:

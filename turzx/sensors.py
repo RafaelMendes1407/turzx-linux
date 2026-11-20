@@ -1,5 +1,7 @@
 """Real Linux readings. Unavailable temperatures are displayed as unavailable."""
 
+import json
+import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -12,13 +14,74 @@ from .gpu import GPU, sample_gpus
 from .history import History
 
 
+@dataclass(frozen=True)
+class Disk:
+    usage: float
+    used: float
+    free: float
+    total: float
+
+
+def sample_disks():
+    mounts = {"/"}
+    mounts.update(partition.mountpoint for partition in psutil.disk_partitions())
+    disks = {}
+    for mount in sorted(mounts):
+        try:
+            usage = psutil.disk_usage(mount)
+        except (OSError, psutil.Error):
+            continue
+        disks[mount] = Disk(usage.percent, usage.used / 2**30, usage.free / 2**30, usage.total / 2**30)
+    return disks
+
+
+def sample_disk_devices():
+    devices = {}
+    for path in sorted(Path("/sys/block").glob("*")):
+        try:
+            if "/devices/virtual/" in str(path.resolve()):
+                continue
+            sectors = int((path / "size").read_text())
+        except (OSError, ValueError):
+            continue
+        devices[f"/dev/{path.name}"] = sectors * 512 / 2**30
+    return devices
+
+
+def disk_metadata():
+    """Map mount paths to physical devices and filesystem labels."""
+    try:
+        result = subprocess.run(
+            ["lsblk", "--json", "--tree", "--output", "KNAME,LABEL,MODEL,MOUNTPOINTS"],
+            capture_output=True, text=True, check=True, timeout=1,
+        )
+        devices = json.loads(result.stdout)["blockdevices"]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+        return {}, {}
+    models, volumes = {}, {}
+
+    def visit(node, device):
+        name = node.get("label") or node["kname"]
+        for mount in node.get("mountpoints") or ():
+            if mount and mount.startswith("/"):
+                volumes[mount] = (device, name)
+        for child in node.get("children", ()):
+            visit(child, device)
+
+    for node in devices:
+        device = "/dev/" + node["kname"]
+        models[device] = (node.get("label") or node.get("model") or "").strip()
+        visit(node, device)
+    return models, volumes
+
+
 @dataclass
 class Metrics:
     cpu: float
     memory: float
     memory_used: float
     memory_total: float
-    disk: float
+    disk: float | None
     temperature: float | None
     download: float
     upload: float
@@ -32,6 +95,10 @@ class Metrics:
     gpus: list[GPU] = field(default_factory=list)
     sampled_at: float = 0
     history: dict = field(default_factory=dict)
+    disks: dict[str, Disk] = field(default_factory=dict)
+    disk_devices: dict[str, float] = field(default_factory=dict)
+    disk_models: dict[str, str] = field(default_factory=dict)
+    disk_volumes: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 class Sampler:
@@ -42,6 +109,7 @@ class Sampler:
         self.last_time = time.monotonic()
         self.last_gpu_time = -10.0
         self.gpus = []
+        self.disk_models, self.disk_volumes = {}, {}
         self.history = History()
         self.cpu_name = "CPU"
         try:
@@ -81,12 +149,17 @@ class Sampler:
             pass
         if now - self.last_gpu_time >= 2:
             self.gpus = sample_gpus()
+            self.disk_models, self.disk_volumes = disk_metadata()
             self.last_gpu_time = now
+        disks = sample_disks()
+        root = disks.get("/")
         metrics = Metrics(psutil.cpu_percent(), memory.percent, memory.used / 2**30,
-                       memory.total / 2**30, psutil.disk_usage("/").percent, temperature,
+                       memory.total / 2**30, root.usage if root else None, temperature,
                        download, upload, int(time.time() - psutil.boot_time()), datetime.now(),
                        self.cpu_name, self.cores, self.threads, frequency,
-                       psutil.cpu_percent(percpu=True), self.gpus, sampled_at=now)
+                       psutil.cpu_percent(percpu=True), self.gpus, sampled_at=now, disks=disks,
+                       disk_devices=sample_disk_devices(), disk_models=self.disk_models,
+                       disk_volumes=self.disk_volumes)
         metrics.history = self.history.record(metrics, now)
         return metrics
 

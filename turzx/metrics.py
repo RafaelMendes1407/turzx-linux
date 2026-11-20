@@ -39,12 +39,56 @@ CATALOG = {
     "clock.date": Metric("system", "Data"),
     "text": Metric("system", "Texto livre"),
 }
-CATEGORIES = {"cpu": "CPU", "gpu": "GPU", "memory": "Memória", "network": "Rede", "system": "Sistema / texto"}
+CATEGORIES = {"cpu": "CPU", "gpu": "GPU", "memory": "Memória", "disk": "Discos",
+              "network": "Rede", "system": "Sistema / texto"}
+DISK_PREFIX = "disk.volume."
+DEVICE_PREFIX = "disk.device.total:"
+DISK_FIELDS = {"usage": ("Uso", "%"), "used": ("Ocupado", "GiB"),
+               "free": ("Livre", "GiB"), "total": ("Capacidade", "GiB")}
+
+
+def metric_keys(metrics=None):
+    keys = list(CATALOG)
+    if metrics is not None:
+        keys.extend(f"cpu.core.{index}" for index in range(len(metrics.per_core)))
+        keys.extend(f"{DISK_PREFIX}{field}:{mount}" for mount in metrics.disks for field in DISK_FIELDS)
+        keys.extend(DEVICE_PREFIX + device for device in metrics.disk_devices)
+    return keys
+
+
+def disk_groups(keys, metrics):
+    """Build device → volume → metric groups, retaining saved offline sources."""
+    groups = {}
+    models = metrics.disk_models if metrics is not None else {}
+    volumes = metrics.disk_volumes if metrics is not None else {}
+    for key in keys:
+        if key.startswith(DEVICE_PREFIX):
+            device = key[len(DEVICE_PREFIX):]
+            model = models.get(device)
+            title = f"{model} · {device}" if model else device
+            groups.setdefault(title, {}).setdefault("", {})[key] = "Capacidade física"
+        elif key.startswith(DISK_PREFIX):
+            field, _, mount = key[len(DISK_PREFIX):].partition(":")
+            device, name = volumes.get(mount, ("", ""))
+            model = models.get(device)
+            title = (f"{model} · {device}" if model else device) or mount
+            volume = f"{name} · {mount}" if name else mount
+            groups.setdefault(title, {}).setdefault(volume, {})[key] = DISK_FIELDS[field][0]
+    return groups
 
 
 def spec(key):
     if isinstance(key, str) and re.fullmatch(r"cpu\.core\.\d{1,4}", key):
         return Metric("cpu", f"Thread {int(key.rsplit('.', 1)[1]) + 1}", "%")
+    if isinstance(key, str) and key.startswith(DISK_PREFIX):
+        field, _, mount = key[len(DISK_PREFIX):].partition(":")
+        if field in DISK_FIELDS and mount.startswith("/") and len(mount) <= 4096:
+            label, unit = DISK_FIELDS[field]
+            return Metric("disk", f"{label} · {mount}", unit)
+    if isinstance(key, str) and key.startswith(DEVICE_PREFIX):
+        device = key[len(DEVICE_PREFIX):]
+        if re.fullmatch(r"/dev/[^/\x00-\x1f]{1,255}", device):
+            return Metric("disk", f"Capacidade · {device}", "GiB")
     if not isinstance(key, str) or key not in CATALOG:
         raise ValueError("Métrica desconhecida.")
     return CATALOG[key]
@@ -76,6 +120,12 @@ def raw_value(key, metrics, gpu_id="auto"):
     if key.startswith("cpu.core."):
         index = int(key.rsplit(".", 1)[1])
         return metrics.per_core[index] if index < len(metrics.per_core) else None
+    if key.startswith(DISK_PREFIX):
+        field, _, mount = key[len(DISK_PREFIX):].partition(":")
+        disk = metrics.disks.get(mount)
+        return getattr(disk, field) if disk is not None else None
+    if key.startswith(DEVICE_PREFIX):
+        return metrics.disk_devices.get(key[len(DEVICE_PREFIX):])
     attrs = {"cpu.usage": "cpu", "cpu.temperature": "temperature", "cpu.cores": "cores",
              "cpu.threads": "threads", "cpu.frequency": "frequency", "cpu.name": "cpu_name",
              "memory.usage": "memory", "memory.used": "memory_used", "memory.total": "memory_total",

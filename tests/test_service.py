@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from turzx import __version__
 from turzx.config import Config, runtime_dir, save_config
-from turzx.service import request, status
+from turzx.service import request, start, status
 
 
 class ServiceTests(unittest.TestCase):
@@ -115,9 +115,15 @@ class ServiceTests(unittest.TestCase):
                 next_process = None
                 try:
                     self.wait_for(request)
-                    next_process = subprocess.Popen([sys.executable, "-m", "turzx", "--run", "--simulate", "--wait-for-worker"],
-                                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    self.assertTrue(request("STOP"))
+                    popen = subprocess.Popen
+                    def simulate(arguments, **kwargs):
+                        nonlocal next_process
+                        next_process = popen([*arguments, "--simulate"], **kwargs)
+                        return next_process
+
+                    with patch("turzx.service.subprocess.Popen", side_effect=simulate) as launch:
+                        start(restart=True)
+                        self.assertIn("--wait-for-worker", launch.call_args.args[0])
                     previous.communicate(timeout=4)
                     self.wait_for(lambda: request() and status().get("running"))
                     self.assertIsNone(next_process.poll())

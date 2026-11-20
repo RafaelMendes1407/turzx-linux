@@ -22,20 +22,21 @@ composição compacta. **Valor com barra** representa métricas percentuais.
 
 ## Gráficos
 
-Arraste **＋ Gráfico** para o fundo ou um contêiner. Nas propriedades:
+Arraste **Gráfico** para o fundo ou um contêiner. Use a seta ao lado do botão
+para escolher outro tipo. As propriedades variam com a visualização.
 
 | Opção | Uso |
 | --- | --- |
 | Informação | Sensor numérico que alimenta o gráfico |
-| Visualização | Linhas, área ou colunas |
+| Visualização | Linhas, área, colunas ou circular |
 | Histórico | Janela de 10 a 300 segundos |
 | Máximo da escala | `0` ajusta automaticamente; outro valor fixa o teto |
 | Grade interna | Linhas dentro do gráfico |
-| Espessura da linha | De 1 a 6 pixels |
+| Espessura do traço | Ajusta o traçado do gráfico |
 | Cor do gráfico / barra | Cor do traçado, preenchimento ou colunas |
 | Placa de vídeo | Seleciona a GPU para métricas de placa de vídeo |
 
-O eixo horizontal termina em **agora**. Percentuais usam teto automático de 100;
+O gráfico circular mostra a leitura atual. Nos gráficos de histórico, o eixo horizontal termina em **agora**. Percentuais usam teto automático de 100;
 outras informações usam o maior valor da janela com margem. As unidades são as
 da leitura: °C, W, MHz, GiB, RPM ou percentual. Rede usa **bytes por segundo** na
 escala manual; `1048576` equivale a 1 MiB/s. Tempo ligado usa segundos.
@@ -54,7 +55,8 @@ nomes de hardware, hora e data não são fontes de gráficos.
 
 Escolha uma categoria e arraste **＋ Contêiner**. Insira leituras dentro dele;
 seus filhos se movem junto com o grupo. Arraste pelo título ou selecione o grupo
-em Camadas. Ajuste fundo, opacidade, borda, cantos e título.
+em Camadas. **Opacidade do fundo** regula a cor de fundo. **Opacidade do painel**
+regula o contêiner inteiro, incluindo título, borda e leituras.
 
 Um contêiner GPU permite escolher a placa. Cada leitura ou gráfico GPU pode
 herdar essa escolha ou apontar para outra placa. Elementos livres têm seleção
@@ -107,3 +109,19 @@ Editar ou salvar depois disso não altera a tela até a próxima aplicação.
 A imagem enviada não contém grade, seleção ou alças.
 
 Limites: 32 contêineres, 32 informações por contêiner e 128 elementos livres.
+
+## Discos
+
+Em **Componentes → Discos**, expanda um dispositivo para ver os volumes
+montados. Cada volume mostra o rótulo do sistema de arquivos, quando disponível,
+e o caminho de montagem. Expanda o volume para adicionar uso percentual, espaço
+ocupado, espaço livre ou capacidade. Para discos físicos, a capacidade também
+fica disponível no nível do dispositivo.
+
+No inspetor de um elemento, selecione **Tipo de informação** e depois a leitura.
+Por exemplo, **CPU → Temperatura**. Para armazenamento, selecione **Discos**,
+escolha o dispositivo e a leitura do volume desejado. Use **Aplicar na tela**
+para enviar o tema ao USB.
+
+**Reiniciar painel** encerra o processo de transmissão e o inicia novamente com
+a configuração aplicada.

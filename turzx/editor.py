@@ -12,29 +12,30 @@ from PIL import Image
 
 from . import service
 from .config import Config, load_config, save_config
-from .gui import box, label
-from .metrics import CATALOG, CATEGORIES, is_numeric, reading, spec
+from .gui import box, label, window_header
+from .metrics import CATEGORIES, disk_groups, is_numeric, metric_keys, reading, spec
 from .sensors import LiveSampler
-from .palette import groups as palette_groups
+from .palette import groups as palette_groups, normalized
 from .theme_render import editor_preview, render_theme
 from .themes import (CHART_STYLES, EditorModel, FONTS, Item, SIZES, STYLES, Theme, encode_background, from_dict, list_themes,
                      load_theme, minimum_size, read_theme, save_theme, starter, uid, viewport_point)
 
 EDITOR_CSS = b"""
-.studio-sidebar { background: #111a28; padding: 16px; }
-.studio-toolbar { background: #141e2c; border-bottom: 1px solid #29384c; padding: 10px 16px; }
-.studio-canvas { background: #070c14; }
-.studio-section { font-size: 10px; letter-spacing: 1px; color: #bacde2; font-weight: 800; }
-.component { background: #1b2a3d; border: 1px solid #2a3b51; padding: 8px 10px; }
-.metric { background: transparent; border: 0; padding: 5px 8px; font-size: 12px; }
-.metric:hover { background: #23344a; }
-.metric label, .component label, .studio-sidebar label { color: #e5effc; }
-.category-button { padding: 7px 9px; }
-.active-category, .active-category:hover { background: #28524a; border-color: #78e7bd; }
+.studio-sidebar { background: #20262b; padding: 12px; }
+.studio-toolbar { background: #252c31; border-bottom: 1px solid #39434b; padding: 7px 12px; }
+.studio-canvas { background: #11161a; border-left: 1px solid #39434b; border-right: 1px solid #39434b; }
+.studio-section { font-size: 11px; letter-spacing: 0.6px; color: #a4b4bd; font-weight: 700; }
+.component { background: #2b343b; border: 1px solid #414d56; padding: 6px 9px; }
+.metric { background: transparent; border: 0; padding: 4px 8px; font-size: 13px; }
+.metric:hover { background: #34444c; }
+.category-button { padding: 4px 8px; }
+.active-category, .active-category:hover { background: #235448; border-color: #5ab99b; }
 .active-category label { color: #b0ffdc; }
 .selected-layer { background: #244c43; color: #9cf4d1; }
-.studio-footer { background: #131d2a; border-top: 1px solid #29384c; padding: 10px 16px; }
-.inspector-title { font-size: 19px; font-weight: 750; }
+.disk-branch > title { border-radius: 6px; padding: 6px; }
+.disk-branch > title:hover { background: #303a42; }
+.studio-footer { background: #252c31; border-top: 1px solid #39434b; padding: 7px 12px; }
+.inspector-title { font-size: 16px; font-weight: 700; }
 .empty { color: #8ca2bc; padding: 12px; }
 """
 
@@ -68,8 +69,13 @@ def compact_dropdown(widget, width=24):
         result = Gtk.SignalListItemFactory()
         def setup(_, item):
             item.set_child(Gtk.Label(xalign=0, ellipsize=3, max_width_chars=width, width_chars=width))
+        def bind(_, item):
+            caption = item.get_child()
+            title = item.get_item().get_string()
+            caption.set_text(title)
+            caption.set_tooltip_text(title)
         result.connect("setup", setup)
-        result.connect("bind", lambda _, item: item.get_child().set_text(item.get_item().get_string()))
+        result.connect("bind", bind)
         return result
     widget.set_factory(factory())
     widget.set_list_factory(factory())
@@ -81,7 +87,6 @@ class StudioWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Turzx Studio · Editor de temas")
         self.set_default_size(1280, 860)
-        self.set_size_request(1000, 620)
         provider = Gtk.CssProvider()
         provider.load_from_data(EDITOR_CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -97,6 +102,7 @@ class StudioWindow(Gtk.ApplicationWindow):
         self.last_image = None
         self.inspector_spins = {}
         self.active_category = "cpu"
+        self.expanded_disks = set()
         error = ""
         try:
             config = load_config()
@@ -113,11 +119,8 @@ class StudioWindow(Gtk.ApplicationWindow):
             theme = starter()
             error = str(exc)
         self.model = EditorModel(theme)
-        header = Gtk.HeaderBar()
-        header.set_title_widget(label("TURZX  /  STUDIO", "brand"))
-        header.pack_start(label("EDITOR DE TEMAS", "badge"))
-        header.pack_end(button("Configurar tela USB", lambda *_: app.open_settings()))
-        self.set_titlebar(header)
+        header = window_header(self, "Turzx Studio")
+        header.pack_start(button("Configurar tela USB", lambda *_: app.open_settings()))
         root = box(spacing=0)
         self.set_child(root)
 
@@ -130,9 +133,15 @@ class StudioWindow(Gtk.ApplicationWindow):
         toolbar.append(self.library)
         toolbar.append(button("+ Novo", self.new_theme))
         toolbar.append(button("Salvar", self.save))
-        toolbar.append(button("Salvar cópia", self.save_copy))
-        toolbar.append(button("Importar", self.import_theme))
-        toolbar.append(button("Exportar", self.export_theme))
+        file_actions = box(spacing=4)
+        file_menu = Gtk.Popover(child=file_actions)
+        for title, action in (("Salvar cópia", self.save_copy), ("Importar", self.import_theme),
+                              ("Exportar", self.export_theme)):
+            def activate(_, callback=action):
+                file_menu.popdown()
+                callback()
+            file_actions.append(button(title, activate))
+        toolbar.append(Gtk.MenuButton(label="Arquivo", popover=file_menu))
         spacer = box()
         spacer.set_hexpand(True)
         toolbar.append(spacer)
@@ -149,11 +158,7 @@ class StudioWindow(Gtk.ApplicationWindow):
         root.append(body)
         left = box(spacing=12)
         left.add_css_class("studio-sidebar")
-        left.set_size_request(224, -1)
-        left.append(label("BIBLIOTECA", "studio-section"))
-        intro = label("Arraste textos, gráficos e leituras\npara o fundo ou para um contêiner.", "muted")
-        intro.set_wrap(True)
-        left.append(intro)
+        left.set_size_request(238, -1)
         tabs = Gtk.Stack()
         tabs.set_vexpand(True)
         switcher = Gtk.StackSwitcher(stack=tabs)
@@ -163,12 +168,23 @@ class StudioWindow(Gtk.ApplicationWindow):
         self.search.connect("search-changed", lambda *_: self.rebuild_palette())
         components.append(self.search)
         tools_row = box(False, 6)
-        text_button = button("＋ Texto livre", lambda *_: self.add_text(), "component")
+        text_button = button("Texto", lambda *_: self.add_text(), "component")
         self.draggable(text_button, "free:text")
         tools_row.append(text_button)
-        chart_button = button("＋ Gráfico", lambda *_: self.add_chart(), "component")
+        chart_button = button("Gráfico", lambda *_: self.add_chart(), "component")
         self.draggable(chart_button, "chart:chart_line")
         tools_row.append(chart_button)
+        chart_actions = box(spacing=4)
+        chart_menu = Gtk.Popover(child=chart_actions)
+        for style, title in CHART_STYLES.items():
+            def activate(_, choice=style):
+                chart_menu.popdown()
+                self.add_chart(choice)
+            chart_button = button(title, activate, "component")
+            chart_actions.append(chart_button)
+        chart_selector = Gtk.MenuButton(icon_name="pan-down-symbolic", popover=chart_menu)
+        chart_selector.set_tooltip_text("Escolher tipo de gráfico")
+        tools_row.append(chart_selector)
         components.append(tools_row)
         categories = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
                                  min_children_per_line=2, max_children_per_line=2,
@@ -226,7 +242,7 @@ class StudioWindow(Gtk.ApplicationWindow):
 
         inspector_outer = box(spacing=8)
         inspector_outer.add_css_class("studio-sidebar")
-        inspector_outer.set_size_request(270, -1)
+        inspector_outer.set_size_request(286, -1)
         inspector_outer.append(label("PROPRIEDADES", "studio-section"))
         self.inspector = box(spacing=12)
         inspector_outer.append(scroll(self.inspector))
@@ -240,6 +256,7 @@ class StudioWindow(Gtk.ApplicationWindow):
         self.feedback.set_max_width_chars(80)
         footer.append(self.feedback)
         footer.append(button("Parar painel", self.stop))
+        footer.append(button("Reiniciar painel", self.restart))
         footer.append(button("Aplicar na tela", self.apply, "suggested-action"))
         root.append(footer)
 
@@ -265,17 +282,13 @@ class StudioWindow(Gtk.ApplicationWindow):
         self.refresh()
         self.timer = GLib.timeout_add(500, self.tick)
         self.connect("close-request", self.on_close)
-        self.allow_close = False
+        self.discard_dialog = None
 
     def show_message(self, message):
         self.feedback.set_text(message)
 
     def all_metrics(self):
-        keys = list(CATALOG)
-        snapshot = self.sampler.latest
-        if snapshot:
-            keys += [f"cpu.core.{index}" for index in range(len(snapshot.per_core))]
-        return keys
+        return metric_keys(self.sampler.latest)
 
     def draggable(self, widget, payload):
         source = Gtk.DragSource()
@@ -299,25 +312,152 @@ class StudioWindow(Gtk.ApplicationWindow):
             else:
                 chip.remove_css_class("active-category")
         clear(self.palette)
-        for category, keys in palette_groups(self.all_metrics(), self.active_category, query).items():
+        keys = self.all_metrics()
+        groups = palette_groups(keys, self.active_category, query)
+        if query.strip():
+            needle = normalized(query.strip())
+            matches = groups.get("disk", [])
+            for device, volumes in disk_groups(keys, self.sampler.latest).items():
+                for volume, metrics in volumes.items():
+                    if needle in normalized(device) or needle in normalized(volume):
+                        matches.extend(key for key in metrics if key not in matches)
+            if matches:
+                groups["disk"] = matches
+        if self.active_category == "disk" and not query and not groups:
+            self.palette.append(label("Aguardando volumes do sistema…", "muted"))
+        for category, keys in groups.items():
             title = CATEGORIES[category]
             section = box(spacing=4)
             add = button(f"＋ Contêiner {title}", lambda _, cat=category: self.add_container(cat), "component")
             self.draggable(add, "container:" + category)
             section.append(add)
-            core_rows = box(spacing=4)
-            for key in keys:
-                row = button("⋮⋮  " + spec(key).label, lambda _, metric=key: self.add_metric(metric), "metric")
-                row.get_child().set_xalign(0)
-                self.draggable(row, "metric:" + key)
-                (core_rows if key.startswith("cpu.core.") else section).append(row)
-            if core_rows.get_first_child():
-                threads = Gtk.Expander(label="Uso por thread lógica", expanded=bool(query))
-                threads.set_child(core_rows)
-                section.append(threads)
+            if category == "disk":
+                self.build_disk_tree(section, keys, bool(query))
+            else:
+                core_rows = box(spacing=4)
+                for key in keys:
+                    rows = core_rows if key.startswith("cpu.core.") else section
+                    rows.append(self.metric_button(key, spec(key).label))
+                if core_rows.get_first_child():
+                    threads = Gtk.Expander(label="Uso por thread lógica", expanded=bool(query))
+                    threads.set_child(core_rows)
+                    section.append(threads)
             if query:
                 self.palette.append(label(title, "studio-section"))
             self.palette.append(section)
+
+    def metric_button(self, key, title):
+        row = button(title, lambda *_: self.add_metric(key), "metric")
+        row.get_child().set_xalign(0)
+        row.get_child().set_ellipsize(3)
+        self.draggable(row, "metric:" + key)
+        row.set_tooltip_text(spec(key).label + "\nClique ou arraste para adicionar.")
+        return row
+
+    def disk_branch(self, title, identity, child, searching):
+        caption = label(title)
+        caption.set_ellipsize(3)
+        branch = Gtk.Expander(label_widget=caption, child=child,
+                              expanded=searching or identity in self.expanded_disks)
+        branch.add_css_class("disk-branch")
+        branch.set_tooltip_text(title)
+
+        def remember(*_):
+            if searching:
+                return
+            if branch.get_expanded():
+                self.expanded_disks.add(identity)
+            else:
+                self.expanded_disks.discard(identity)
+        branch.connect("notify::expanded", remember)
+        return branch
+
+    def build_disk_tree(self, parent, keys, searching):
+        for device, volumes in disk_groups(keys, self.sampler.latest).items():
+            children = box(spacing=2)
+            children.set_margin_start(12)
+            for volume, metrics in volumes.items():
+                branch = children
+                if volume and volume != device:
+                    branch = box(spacing=2)
+                    branch.set_margin_start(12)
+                    children.append(self.disk_branch(volume, (device, volume), branch, searching))
+                for key, title in metrics.items():
+                    branch.append(self.metric_button(key, title))
+            parent.append(self.disk_branch(device, (device,), children, searching))
+
+    def build_metric_selectors(self, item, field, update):
+        keys = self.all_metrics()
+        chart = item.style in CHART_STYLES
+        if chart:
+            keys = [key for key in keys if is_numeric(key)]
+        if item.metric not in keys:
+            keys.append(item.metric)
+        categories = {category: [key for key in keys if spec(key).category == category]
+                      for category in CATEGORIES}
+        start_category = spec(item.metric).category
+        category_ids = list(categories)
+        category = compact_dropdown(Gtk.DropDown.new_from_strings(list(CATEGORIES.values())))
+        category.set_selected(category_ids.index(start_category))
+        field("Tipo de informação", category)
+
+        disk = compact_dropdown(Gtk.DropDown.new_from_strings([]))
+        disk_row = field("Disco", disk)
+        info = compact_dropdown(Gtk.DropDown.new_from_strings([]))
+        field("Informação", info)
+        devices = disk_groups(categories["disk"], self.sampler.latest)
+        device_ids = list(devices)
+        choices = []
+        changing = False
+
+        def set_options(widget, names, index=0):
+            widget.set_model(Gtk.StringList.new(names))
+            widget.set_selected(index)
+
+        def show_information(keep=None):
+            nonlocal choices
+            current = category_ids[category.get_selected()]
+            if current == "disk":
+                index = disk.get_selected()
+                volumes = devices[device_ids[index - 1]] if 0 < index <= len(device_ids) else {}
+                options = {key: f"{title} · {volume}" if volume and len(volumes) > 1 else title
+                           for volume, metrics in volumes.items() for key, title in metrics.items()}
+            else:
+                options = {key: spec(key).label for key in categories[current]}
+            choices = [None, *options]
+            prompt = "Selecione uma informação" if options else "Sem informações disponíveis"
+            set_options(info, [prompt, *options.values()], choices.index(keep) if keep in choices else 0)
+            info.set_sensitive(bool(options))
+
+        def change_category(keep=None):
+            nonlocal changing
+            changing = True
+            is_disk = category_ids[category.get_selected()] == "disk"
+            disk_row.set_visible(is_disk)
+            if is_disk:
+                selected = next((index for index, groups in enumerate(devices.values(), 1)
+                                 if any(keep in metrics for metrics in groups.values())), 0)
+                set_options(disk, ["Selecione um disco" if device_ids else "Nenhum disco detectado", *device_ids], selected)
+                disk.set_sensitive(bool(device_ids))
+            show_information(keep)
+            changing = False
+
+        def change_disk(*_):
+            nonlocal changing
+            if not changing:
+                changing = True
+                show_information()
+                changing = False
+
+        def change_information(*_):
+            index = info.get_selected()
+            if not changing and 0 < index < len(choices):
+                update("metric", choices[index], True)
+
+        change_category(item.metric)
+        category.connect("notify::selected", lambda *_: change_category())
+        disk.connect("notify::selected", change_disk)
+        info.connect("notify::selected", change_information)
 
     def refresh_library(self):
         self.library_refreshing = True
@@ -350,13 +490,19 @@ class StudioWindow(Gtk.ApplicationWindow):
         if not self.model.dirty:
             action()
             return
+        if self.discard_dialog:
+            self.discard_dialog.present()
+            return
         dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
                                    text="Salvar as alterações do tema?",
                                    secondary_text="Você pode salvar antes de continuar ou descartar apenas as alterações não salvas.")
         dialog.add_button("Continuar editando", Gtk.ResponseType.CANCEL)
         dialog.add_button("Descartar alterações", Gtk.ResponseType.REJECT)
         dialog.add_button("Salvar e continuar", Gtk.ResponseType.ACCEPT)
+        self.discard_dialog = dialog
+
         def response(widget, code):
+            self.discard_dialog = None
             widget.destroy()
             if code == Gtk.ResponseType.REJECT or (code == Gtk.ResponseType.ACCEPT and self.save()):
                 action()
@@ -472,6 +618,13 @@ class StudioWindow(Gtk.ApplicationWindow):
 
     def stop(self, *_):
         self.show_message("Parando painel…" if service.request("STOP") else "O painel já está parado.")
+
+    def restart(self, *_):
+        try:
+            service.start(restart=True)
+            self.show_message("Reiniciando o painel com o tema aplicado…")
+        except OSError as exc:
+            self.show_message(str(exc))
 
     def add_container(self, category, x=None, y=None):
         try:
@@ -640,7 +793,9 @@ class StudioWindow(Gtk.ApplicationWindow):
         self.paint()
         snapshot = self.sampler.latest
         if snapshot:
-            signature = (len(snapshot.per_core), tuple(gpu.id for gpu in snapshot.gpus))
+            signature = (len(snapshot.per_core), tuple(gpu.id for gpu in snapshot.gpus),
+                         tuple(snapshot.disks), tuple(snapshot.disk_devices),
+                         tuple(snapshot.disk_models.items()), tuple(snapshot.disk_volumes.items()))
             if signature != self.catalog_signature:
                 self.catalog_signature = signature
                 self.rebuild_palette()
@@ -690,6 +845,7 @@ class StudioWindow(Gtk.ApplicationWindow):
             group.append(label(title, "field-label"))
             group.append(widget)
             self.inspector.append(group)
+            return group
 
         def entry(title, key, limit=60):
             widget = Gtk.Entry(text=getattr(target, key), max_length=limit)
@@ -736,15 +892,7 @@ class StudioWindow(Gtk.ApplicationWindow):
         if item:
             if c:
                 self.inspector.append(button("↑ Selecionar contêiner", lambda *_: self.select((c.id, None))))
-            keys = self.all_metrics()
-            if item.style in CHART_STYLES:
-                keys = [key for key in keys if is_numeric(key)]
-            if item.metric not in keys:
-                keys.append(item.metric)
-            source = compact_dropdown(Gtk.DropDown.new_from_strings([CATEGORIES[spec(k).category] + " · " + spec(k).label for k in keys]))
-            source.set_selected(keys.index(item.metric))
-            source.connect("notify::selected", lambda *_: update("metric", keys[source.get_selected()], True))
-            field("Informação", source)
+            self.build_metric_selectors(item, field, update)
             entry("Rótulo (vazio = automático)", "label")
             if item.metric == "text":
                 entry("Texto", "text", 150)
@@ -754,7 +902,9 @@ class StudioWindow(Gtk.ApplicationWindow):
             style.connect("notify::selected", lambda *_: update("style", list(styles)[style.get_selected()], True))
             field("Visualização", style)
             if item.style in CHART_STYLES:
-                number("Histórico (segundos)", "chart_window", 10, 300)
+                circular = item.style == "chart_circle"
+                if not circular:
+                    number("Histórico (segundos)", "chart_window", 10, 300)
                 maximum = Gtk.SpinButton.new_with_range(0, 1e15, 1)
                 maximum.set_digits(1)
                 maximum.set_value(item.chart_max)
@@ -762,8 +912,9 @@ class StudioWindow(Gtk.ApplicationWindow):
                 self.inspector_spins["chart_max"] = maximum
                 unit = "B/s" if item.metric.startswith("network.") else ("s" if item.metric == "system.uptime" else spec(item.metric).unit)
                 field(f"Máximo da escala{(' · ' + unit) if unit else ''} (0 = automático)", maximum)
-                toggle("Grade interna do gráfico", "chart_grid")
-                number("Espessura da linha (px)", "chart_line_width", 1, 6)
+                if not circular:
+                    toggle("Grade interna do gráfico", "chart_grid")
+                number("Espessura do traço (px)", "chart_line_width", 1, 6)
             if item.metric.startswith("gpu."):
                 gpus = self.sampler.latest.gpus if self.sampler.latest else []
                 ids = (["inherit"] if c else []) + ["auto"] + [gpu.id for gpu in gpus]
@@ -816,12 +967,13 @@ class StudioWindow(Gtk.ApplicationWindow):
             number("Espessura da borda (px)", "border_width", 0, 6)
             number("Cantos arredondados (px)", "radius", 0, 48)
             number("Fonte do título", "title_size", 8, 28)
-            opacity = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
-            opacity.set_value(c.opacity / 255 * 100)
-            opacity.set_draw_value(True)
-            opacity.set_digits(0)
-            opacity.connect("value-changed", lambda *_: update("opacity", round(opacity.get_value() / 100 * 255)))
-            field("Opacidade do fundo (%)", opacity)
+            for title, key in (("Opacidade do fundo (%)", "opacity"), ("Opacidade do painel (%)", "panel_opacity")):
+                opacity = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+                opacity.set_value(round(getattr(c, key) / 255 * 100))
+                opacity.set_draw_value(True)
+                opacity.set_digits(0)
+                opacity.connect("value-changed", lambda scale, prop=key: update(prop, round(scale.get_value() * 255 / 100)))
+                field(title, opacity)
         self.inspector.append(label("POSIÇÃO E TAMANHO · PX", "studio-section"))
         min_width, min_height = minimum_size(item) if item else (96, 64)
         for title, key, low, high in (("X", "x", 0, 480), ("Y", "y", 0, 480),
@@ -841,12 +993,16 @@ class StudioWindow(Gtk.ApplicationWindow):
         self.choose_file("Imagem de fundo", Gtk.FileChooserAction.OPEN, chosen, images=True)
 
     def on_close(self, *_):
-        if not self.allow_close and self.model.dirty:
-            def close():
-                self.allow_close = True
-                self.close()
-            self.confirm_discard(close)
+        if self.model.dirty:
+            self.confirm_discard(self.finish_close)
             return True
+        self.stop_preview()
+        return False
+
+    def stop_preview(self):
         GLib.source_remove(self.timer)
         self.sampler.close()
-        return False
+
+    def finish_close(self):
+        self.stop_preview()
+        self.destroy()

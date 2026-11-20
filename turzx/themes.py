@@ -17,7 +17,8 @@ from .metrics import CATEGORIES, is_numeric, spec
 
 SIZES = ((480, 320), (320, 480))
 STYLES = {"line": "Linha: rótulo + valor", "value": "Destaque: valor grande", "bar": "Valor com barra",
-          "chart_line": "Gráfico de linhas", "chart_area": "Gráfico de área", "chart_bars": "Gráfico de colunas"}
+          "chart_line": "Gráfico de linhas", "chart_area": "Gráfico de área", "chart_bars": "Gráfico de colunas",
+          "chart_circle": "Gráfico circular"}
 CHART_STYLES = {key: name for key, name in STYLES.items() if key.startswith("chart_")}
 FONTS = {"sans": "DejaVu Sans", "mono": "DejaVu Mono", "serif": "DejaVu Serif"}
 
@@ -93,6 +94,7 @@ class Container:
     gpu_id: str = "auto"
     items: list[Item] = field(default_factory=list)
     z: int = 0
+    panel_opacity: int = 255
 
 
 @dataclass
@@ -147,7 +149,8 @@ class Theme:
                 color(value)
             integer(c.border_width, 0, 6, "Borda")
             integer(c.radius, 0, 48, "Arredondamento")
-            integer(c.opacity, 0, 255, "Opacidade")
+            integer(c.opacity, 0, 255, "Opacidade do fundo")
+            integer(c.panel_opacity, 0, 255, "Opacidade do painel")
             integer(c.title_size, 8, 28, "Fonte do título")
             integer(c.z, 0, 4096, "Camada")
             text_value(c.gpu_id, 128, "GPU")

@@ -35,10 +35,10 @@ def request(message="PING"):
         return False
 
 
-def start():
+def start(*, restart=False):
     replacing = False
     if request():
-        if status().get("version") == __version__:
+        if not restart and status().get("version") == __version__:
             return
         request("STOP")
         replacing = True
