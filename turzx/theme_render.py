@@ -77,7 +77,10 @@ def render_theme(theme, metrics):
             panel.alpha_composite(render_item(item, metrics, c.gpu_id), (item.x, item.y))
         mask = Image.new("L", panel.size)
         ImageDraw.Draw(mask).rounded_rectangle((0, 0, c.width - 1, c.height - 1), radius=c.radius, fill=255)
-        panel.putalpha(ImageChops.multiply(panel.getchannel("A"), mask))
+        alpha = ImageChops.multiply(panel.getchannel("A"), mask)
+        if c.panel_opacity != 255:
+            alpha = alpha.point([round(value * c.panel_opacity / 255) for value in range(256)])
+        panel.putalpha(alpha)
         image.alpha_composite(panel, (c.x, c.y))
     return image.convert("RGB")
 

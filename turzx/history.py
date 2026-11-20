@@ -3,7 +3,7 @@
 from collections import deque
 import math
 
-from .metrics import CATALOG, history_key, is_numeric, raw_value
+from .metrics import history_key, is_numeric, metric_keys, raw_value
 
 
 class History:
@@ -13,7 +13,7 @@ class History:
 
     def record(self, metrics, timestamp):
         values = {}
-        for key in list(CATALOG) + [f"cpu.core.{i}" for i in range(len(metrics.per_core))]:
+        for key in metric_keys(metrics):
             if not is_numeric(key):
                 continue
             ids = [gpu.id for gpu in metrics.gpus] if key.startswith("gpu.") else ["auto"]

@@ -8,8 +8,9 @@ from test_app import METRICS
 from turzx.charts import render_chart
 from turzx.gpu import GPU
 from turzx.history import History
-from turzx.metrics import CATALOG, history_key
+from turzx.metrics import CATALOG, disk_groups, history_key, metric_keys, reading
 from turzx.palette import groups
+from turzx.sensors import Disk
 from turzx.theme_render import editor_preview, render_theme
 from turzx.themes import EditorModel, Item, Theme, from_dict, starter
 
@@ -69,6 +70,7 @@ class FreeElementTests(unittest.TestCase):
         old.pop("items")
         for c in old["containers"]:
             c.pop("z")
+            c.pop("panel_opacity")
             for i in c["items"]:
                 for key in ("z", "gpu_id", "chart_window", "chart_max", "chart_line_width", "chart_grid"):
                     i.pop(key)
@@ -133,13 +135,41 @@ class HistoryAndChartTests(unittest.TestCase):
         for t, value in enumerate((0, 25, None, 80, 40)):
             metrics = replace(METRICS, temperature=value, sampled_at=t)
             metrics.history = history.record(metrics, t)
-        for style in ("chart_line", "chart_area", "chart_bars"):
+        for style in ("chart_line", "chart_area", "chart_bars", "chart_circle"):
             item = Item(metric="cpu.temperature", width=220, height=110, style=style, chart_window=10)
             image = render_chart(item, metrics, "auto")
             self.assertEqual(image.size, (220, 110))
             self.assertTrue(image.getbbox())
             empty = render_chart(item, replace(metrics, history={}, temperature=None), "auto")
             self.assertNotEqual(image.tobytes(), empty.tobytes())
+
+    def test_disk_circle_and_panel_opacity_roundtrip(self):
+        model = EditorModel(Theme())
+        panel = model.add_container("disk")
+        mount = "disk.volume.usage:/mnt/Dados"
+        model.add_chart("chart_circle", key=mount)
+        metrics = replace(METRICS, disks={"/mnt/Dados": Disk(50, 32, 32, 64)},
+                          disk_devices={"/dev/sdb": 128})
+        disks = groups(metric_keys(metrics), selected="disk")["disk"]
+        self.assertIn(mount, disks)
+        self.assertIn("disk.device.total:/dev/sdb", disks)
+        self.assertEqual(reading(mount, metrics).text, "50 %")
+        history = History()
+        self.assertEqual(history.record(metrics, 1)[mount], ((1, 50),))
+        disconnected = replace(metrics, disks={})
+        self.assertFalse(reading(mount, disconnected).available)
+        self.assertEqual(history.record(disconnected, 2)[mount][-1], (2, None))
+        self.assertNotEqual(render_theme(model.theme, metrics).tobytes(),
+                            render_theme(model.theme, disconnected).tobytes())
+
+        model.selection = (panel.id, None)
+        model.set_properties(opacity=0)
+        visible = render_theme(model.theme, metrics)
+        self.assertNotEqual(visible.tobytes(), Image.new("RGB", model.theme.size, model.theme.background).tobytes())
+        model.set_properties(panel_opacity=0)
+        saved = from_dict(asdict(model.theme))
+        self.assertEqual(render_theme(saved, metrics).tobytes(),
+                         Image.new("RGB", saved.size, saved.background).tobytes())
 
     def test_plot_gap_is_not_interpolated(self):
         metrics = replace(METRICS, sampled_at=10, history={"cpu.usage": ((0, 50), (4, 50), (5, None), (6, 50), (10, 50))})
@@ -170,6 +200,18 @@ class LibraryTests(unittest.TestCase):
     def test_search_crosses_categories_and_accepts_missing_accents(self):
         self.assertIn("memory.usage", groups(list(CATALOG), selected="cpu", query="memoria")["memory"])
         self.assertIn("cpu.cores", groups(list(CATALOG), selected="network", query="nucleos")["cpu"])
+
+    def test_disk_tree_groups_labeled_volumes_and_retains_offline_metrics(self):
+        snapshot = replace(METRICS, disks={"/mnt/Dados": Disk(50, 32, 32, 64)},
+                           disk_devices={"/dev/sdb": 128}, disk_models={"/dev/sdb": "SSD"},
+                           disk_volumes={"/mnt/Dados": ("/dev/sdb", "Dados")})
+        offline = "disk.volume.usage:/mnt/Offline"
+        devices = disk_groups([*metric_keys(snapshot), offline], snapshot)
+        disk = devices["SSD · /dev/sdb"]
+        self.assertEqual(list(disk["Dados · /mnt/Dados"].values()),
+                         ["Uso", "Ocupado", "Livre", "Capacidade"])
+        self.assertIn("disk.device.total:/dev/sdb", disk[""])
+        self.assertIn(offline, devices["/mnt/Offline"]["/mnt/Offline"])
 
     def test_graph_history_is_not_exported_in_theme(self):
         model = EditorModel(Theme())

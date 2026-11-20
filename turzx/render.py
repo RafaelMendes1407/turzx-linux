@@ -84,6 +84,7 @@ def render(config, metrics):
         d.text((x + 13, y + ch - 17), detail, font=fit_text(d, detail, cw - 26, 9), fill=muted)
 
     temp = "—" if metrics.temperature is None else f"{metrics.temperature:.0f}°C"
+    disk_text = "N/D" if metrics.disk is None else f"{metrics.disk:.0f}%"
     temp_detail = "sensor indisponível" if metrics.temperature is None else "temperatura da CPU"
     if w == 480:
         metric(18, 119, 140, 103, "PROCESSADOR", f"{metrics.cpu:.0f}%", "uso da CPU", metrics.cpu)
@@ -99,14 +100,14 @@ def render(config, metrics):
         metric(166, 121, 136, 113, "MEMÓRIA", f"{metrics.memory:.0f}%",
                f"{metrics.memory_used:.1f} / {metrics.memory_total:.0f} GB", metrics.memory)
         metric(18, 246, 136, 103, "TEMPERATURA", temp, temp_detail)
-        metric(166, 246, 136, 103, "DISCO /", f"{metrics.disk:.0f}%", "espaço utilizado", metrics.disk)
+        metric(166, 246, 136, 103, "DISCO /", disk_text, "espaço utilizado", metrics.disk)
         d.rounded_rectangle((18, 361, 302, 437), radius=12, fill=card)
         d.text((31, 372), "REDE", font=font(10, True), fill=muted)
         d.text((31, 393), f"↓ {rate(metrics.download)}", font=font(16, True), fill=accent)
         d.text((177, 393), f"↑ {rate(metrics.upload)}", font=font(13), fill=white)
     hours, minutes = divmod(metrics.uptime // 60, 60)
     d.text((18, h - 20), f"LIGADO HÁ {hours}H {minutes:02d}M", font=font(9), fill=muted)
-    footer = f"DISCO /  {metrics.disk:.0f}%" if w == 480 else "LINUX • USB"
+    footer = f"DISCO /  {disk_text}" if w == 480 else "LINUX • USB"
     d.text((w - 18, h - 20), footer, font=font(9), fill=muted, anchor="ra")
     return image
 
